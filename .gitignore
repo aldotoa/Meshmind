@@ -4,3 +4,4 @@ apps/desktop/src-tauri/gen
 *.glb
 .DS_Store
 demo.png
+bevels.png

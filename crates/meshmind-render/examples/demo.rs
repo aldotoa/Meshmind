@@ -9,7 +9,7 @@ fn main() {
     let mut scene = Scene::new();
 
     // A bevelled crate with a recessed panel on top and a hole through it.
-    let body = ops::bevel(&primitives::cube(1.0), 0.06, 30.0).unwrap();
+    let body = ops::bevel(&primitives::cube(1.0), 0.06, 30.0, 4).unwrap();
     let up = Selection::Facing {
         direction: Vec3::Y,
         max_angle_deg: 5.0,

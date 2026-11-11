@@ -3,6 +3,7 @@
 //! This crate has no UI and no I/O beyond what callers ask for, so it can be
 //! driven from the MCP server, the desktop app, or tests.
 
+pub mod bevel;
 pub mod csg;
 pub mod export;
 pub mod material;

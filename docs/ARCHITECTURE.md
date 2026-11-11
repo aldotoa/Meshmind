@@ -92,8 +92,9 @@ watches, reviews, and steers.
 
 ## Known limitations (step 2)
 
-- `bevel` is a single-segment chamfer of hard edges. On meshes that mix hard
-  and soft edges at one vertex it can leave T-junctions.
+- `bevel` rounds hard edges with 1 to 16 segments and stays watertight where
+  hard and soft edges meet. Concave edges get the same arc profile, which is a
+  close approximation rather than a true fillet.
 - `boolean` (BSP, after csg.js) needs closed inputs and can produce thin
   slivers; results are welded but not retopologised.
 - The software preview has no shadows or reflections; the desktop viewer does.

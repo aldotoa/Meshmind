@@ -133,127 +133,8 @@ pub fn inset(mesh: &PolyMesh, selection: &Selection, amount: f32) -> Result<Poly
     Ok(out)
 }
 
-/// Chamfer the hard edges of a closed mesh: edges where the faces meet at more
-/// than `angle_deg` degrees. `amount` is the distance from the original edge.
-/// Hard-surface models look far more real with small bevels; follow with a
-/// smooth `subdivide` for rounded edges.
-pub fn bevel(mesh: &PolyMesh, amount: f32, angle_deg: f32) -> Result<PolyMesh, String> {
-    if !mesh.is_closed_manifold() {
-        return Err("bevel needs a closed mesh (every edge shared by two faces)".into());
-    }
-    let edges = mesh.directed_edges();
-    let normals: Vec<Vec3> = mesh.faces.iter().map(|f| mesh.face_normal(f)).collect();
-    let cos_limit = angle_deg.to_radians().cos();
-    let sharp = |a: u32, b: u32| -> bool {
-        let (f, g) = (edges[&(a, b)], edges[&(b, a)]);
-        normals[f].dot(normals[g]) < cos_limit
-    };
+pub use crate::bevel::bevel;
 
-    let min_edge = mesh
-        .faces
-        .iter()
-        .flat_map(|f| f.edges())
-        .filter(|&(a, b)| sharp(a, b))
-        .map(|(a, b)| mesh.positions[a as usize].distance(mesh.positions[b as usize]))
-        .fold(f32::INFINITY, f32::min);
-    if !min_edge.is_finite() {
-        return Err(format!(
-            "no edges sharper than {angle_deg} degrees to bevel"
-        ));
-    }
-    let amount = amount.min(min_edge * 0.45);
-    if amount <= 0.0 {
-        return Err("bevel amount must be positive".into());
-    }
-
-    let mut out = PolyMesh::default();
-    // corner[(face, vertex)] = new vertex id. Each face's corner moves away
-    // from its sharp edges, staying in the face's plane.
-    let mut corner: HashMap<(usize, u32), u32> = HashMap::new();
-    for (fi, f) in mesh.faces.iter().enumerate() {
-        let n = f.verts.len();
-        let mut new_face = Vec::with_capacity(n);
-        for k in 0..n {
-            let v = f.verts[k];
-            let (pv, nv) = (f.verts[(k + n - 1) % n], f.verts[(k + 1) % n]);
-            let p = mesh.positions[v as usize];
-            let u_prev = (mesh.positions[pv as usize] - p).normalize_or_zero();
-            let u_next = (mesh.positions[nv as usize] - p).normalize_or_zero();
-            let corner_angle = u_prev
-                .angle_between(u_next)
-                .clamp(0.2, std::f32::consts::PI - 0.2);
-            // Place the corner exactly `amount` away from each sharp edge.
-            let offset = match (sharp(pv, v), sharp(v, nv)) {
-                (true, true) => {
-                    (u_prev + u_next).normalize_or_zero() * (amount / (corner_angle / 2.0).sin())
-                }
-                (false, true) => u_prev * (amount / corner_angle.sin()),
-                (true, false) => u_next * (amount / corner_angle.sin()),
-                (false, false) => Vec3::ZERO,
-            };
-            let id = out.add_vertex(p + offset);
-            corner.insert((fi, v), id);
-            new_face.push(id);
-        }
-        out.add_face(new_face, f.smooth);
-    }
-
-    for (fi, f) in mesh.faces.iter().enumerate() {
-        for (a, b) in f.edges() {
-            let g = edges[&(b, a)];
-            // Each sharp undirected edge once.
-            if fi < g && sharp(a, b) {
-                out.add_face(
-                    vec![
-                        corner[&(fi, b)],
-                        corner[&(fi, a)],
-                        corner[&(g, a)],
-                        corner[&(g, b)],
-                    ],
-                    false,
-                );
-            }
-        }
-    }
-
-    // One polygon per original vertex, closing the gap between its corners.
-    let mut outgoing: HashMap<u32, Vec<(usize, u32)>> = HashMap::new();
-    for (fi, f) in mesh.faces.iter().enumerate() {
-        for (a, b) in f.edges() {
-            outgoing.entry(a).or_default().push((fi, b));
-        }
-    }
-    let mut vertex_ids: Vec<u32> = outgoing.keys().copied().collect();
-    vertex_ids.sort_unstable();
-    for v in vertex_ids {
-        let out_edges = &outgoing[&v];
-        if !out_edges.iter().any(|&(_, b)| sharp(v, b)) {
-            continue;
-        }
-        let start = out_edges[0].0;
-        let mut ring = vec![start];
-        let mut f = start;
-        loop {
-            let (_, b) = *out_edges
-                .iter()
-                .find(|(face, _)| *face == f)
-                .expect("manifold");
-            f = edges[&(b, v)];
-            if f == start {
-                break;
-            }
-            ring.push(f);
-            if ring.len() > out_edges.len() {
-                return Err("bevel found a non-manifold vertex".into());
-            }
-        }
-        ring.reverse();
-        out.add_face(ring.iter().map(|&f| corner[&(f, v)]).collect(), false);
-    }
-    // Corners that did not move coincide; merge them and drop collapsed faces.
-    out.weld(amount * 1e-3);
-    Ok(out)
-}
 /// Catmull-Clark subdivision (`smooth = true`) rounds the shape and makes it
 /// look organic. Linear subdivision (`smooth = false`) only adds detail
 /// without changing the shape. Each level multiplies the face count by about 4.
@@ -403,7 +284,7 @@ pub fn array(mesh: &PolyMesh, count: u32, offset: Vec3) -> Result<PolyMesh, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::primitives::{cube, cylinder, uv_sphere};
+    use crate::primitives::{cube, uv_sphere};
 
     fn up() -> Selection {
         Selection::Facing {
@@ -433,35 +314,6 @@ mod tests {
     fn empty_selection_is_an_error() {
         let sel = Selection::Faces { indices: vec![] };
         assert!(extrude(&cube(1.0), &sel, 1.0).is_err());
-    }
-
-    #[test]
-    fn bevel_cube() {
-        let m = bevel(&cube(1.0), 0.1, 30.0).unwrap();
-        assert!(m.is_closed_manifold());
-        assert_eq!(m.faces.len(), 6 + 12 + 8);
-        let v = m.volume();
-        assert!(v < 1.0 && v > 0.9, "volume {v}");
-        let b = m.bounds().unwrap();
-        assert!(
-            (b.size() - Vec3::ONE).length() < 1e-5,
-            "bevel keeps outer size"
-        );
-    }
-
-    #[test]
-    fn bevel_cylinder() {
-        let c = cylinder(0.5, 1.0, 32);
-        let m = bevel(&c, 0.05, 30.0).unwrap();
-        assert!(m.is_closed_manifold());
-        let (v0, v1) = (c.volume(), m.volume());
-        assert!(v1 < v0 && v1 > v0 * 0.95, "{v0} -> {v1}");
-        // Only the two rims are bevelled: 32 side faces + 2 caps + 64 rim chamfers.
-        assert_eq!(m.faces.len(), 32 + 2 + 64);
-        assert!(
-            bevel(&crate::primitives::uv_sphere(1.0, 16, 8), 0.05, 30.0).is_err(),
-            "a sphere has no hard edges"
-        );
     }
 
     #[test]

@@ -106,11 +106,13 @@ pub fn definitions() -> Value {
                     "amount": { "type": "number", "description": "0 to 1: fraction of the way to the centre. Typical 0.1 to 0.3." } }),
             &["id", "faces", "amount"]),
         tool("bevel",
-            "Chamfer the hard edges of a closed object (edges where faces meet at more than `angle` \
-             degrees, default 30). Real objects never have perfectly sharp edges: a small bevel \
-             (1 to 3% of the object's size) makes models look far more realistic. Curved surfaces \
-             like a cylinder's side are left alone. Follow with subdivide (smooth) for rounded edges.",
+            "Round off the hard edges of a closed object (edges where faces meet at more than \
+             `angle` degrees, default 30). Real objects never have perfectly sharp edges: a small \
+             rounded bevel (1 to 3% of the object's size) is one of the biggest steps towards a \
+             professional look. Curved surfaces like a cylinder's side are left alone. Use \
+             segments 1 for a flat chamfer (machined or cut look), 3 to 5 for rounded edges.",
             json!({ "id": id_prop(), "amount": { "type": "number", "description": "Bevel width in local units." },
+                    "segments": { "type": "integer", "minimum": 1, "maximum": 16, "description": "1 = flat chamfer, more = rounder. Default 3." },
                     "angle": { "type": "number", "description": "Only edges sharper than this many degrees. Default 30." } }),
             &["id", "amount"]),
         tool("subdivide",
@@ -200,7 +202,8 @@ pub fn call(scene: &mut Scene, name: &str, args: &Value) -> Option<Result<ToolOu
         }),
         "bevel" => edit(scene, args, |m, _, a| {
             let angle = a.get("angle").and_then(Value::as_f64).unwrap_or(30.0) as f32;
-            ops::bevel(m, positive(a, "amount", None)?, angle)
+            let segments = a.get("segments").and_then(Value::as_u64).unwrap_or(3) as u32;
+            ops::bevel(m, positive(a, "amount", None)?, angle, segments)
         }),
         "subdivide" => edit(scene, args, |m, _, a| {
             let levels = a.get("levels").and_then(Value::as_u64).unwrap_or(1) as u32;
