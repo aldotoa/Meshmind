@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/meshmind-core",
+    "crates/meshmind-mcp",
+    "apps/desktop/src-tauri",
+]
+# The desktop app needs system WebView libraries, so plain `cargo build`
+# and `cargo test` cover the engine crates only. CI builds the app separately.
+default-members = ["crates/meshmind-core", "crates/meshmind-mcp"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/aldotoa/meshmind"
+rust-version = "1.80"
+
+[workspace.dependencies]
+glam = { version = "0.29", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+meshmind-core = { path = "crates/meshmind-core" }
+meshmind-mcp = { path = "crates/meshmind-mcp" }

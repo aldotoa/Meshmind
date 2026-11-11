@@ -1,0 +1,18 @@
+[package]
+name = "meshmind-mcp"
+description = "MCP server that lets AI agents drive MeshMind"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meshmind-mcp"
+path = "src/main.rs"
+
+[dependencies]
+meshmind-core.workspace = true
+glam.workspace = true
+serde.workspace = true
+serde_json.workspace = true

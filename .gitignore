@@ -1,0 +1,5 @@
+/target
+**/node_modules
+apps/desktop/src-tauri/gen
+*.glb
+.DS_Store

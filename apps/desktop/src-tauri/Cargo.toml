@@ -1,0 +1,18 @@
+[package]
+name = "meshmind-desktop"
+description = "MeshMind desktop app: live viewer and review UI for agent-built models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+meshmind-core.workspace = true
+meshmind-mcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
