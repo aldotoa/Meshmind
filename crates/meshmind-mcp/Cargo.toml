@@ -13,6 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 meshmind-core.workspace = true
+meshmind-render.workspace = true
 glam.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+base64 = "0.22"
+tiny_http = "0.12"

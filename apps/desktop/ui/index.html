@@ -9,18 +9,36 @@
 <body>
   <header>
     <strong>MeshMind</strong>
-    <span id="version"></span>
+    <span id="version" class="muted"></span>
+    <div class="spacer"></div>
+    <span id="endpoint" class="pill" title="Agents connect here"></span>
+    <button id="copy-cmd" class="ghost">Copy Claude Code command</button>
   </header>
   <main>
     <section id="viewport">
-      <p>3D viewport arrives in step 2.<br>Your AI agent builds the model; you watch it here.</p>
+      <canvas id="canvas"></canvas>
+      <div id="stats" class="overlay top-left"></div>
+      <div class="overlay bottom">
+        <button id="undo" class="ghost" title="Undo (Ctrl+Z)">Undo</button>
+        <button id="redo" class="ghost" title="Redo (Ctrl+Shift+Z)">Redo</button>
+        <button id="frame" class="ghost" title="Frame all (F)">Frame</button>
+        <button id="wire" class="ghost" title="Toggle wireframe (W)">Wireframe</button>
+      </div>
     </section>
     <aside>
+      <div id="welcome" class="card">
+        <h2>Get started</h2>
+        <p>MeshMind is driven by your AI agent. Connect it once:</p>
+        <code id="cmd"></code>
+        <p>Then ask it something like:</p>
+        <p class="quote">"Using MeshMind, build a weathered wooden treasure chest with iron bands."</p>
+        <p class="muted">Works with any MCP client: Claude Code, Codex, Cursor and more.</p>
+      </div>
       <h2>Scene</h2>
-      <ul id="objects"><li class="muted">Empty</li></ul>
-      <button id="demo">Add a test cube</button>
+      <ul id="objects"></ul>
+      <p id="error" class="error" hidden></p>
     </aside>
   </main>
-  <script src="main.js"></script>
+  <script type="module" src="main.js"></script>
 </body>
 </html>

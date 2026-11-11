@@ -1,9 +1,9 @@
-use glam::{Quat, Vec3};
+use glam::{Affine3A, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::material::{Material, MaterialId};
-use crate::mesh::Mesh;
+use crate::poly::PolyMesh;
 
 pub type ObjectId = u32;
 
@@ -12,6 +12,12 @@ pub struct Transform {
     pub translation: Vec3,
     pub rotation: Quat,
     pub scale: Vec3,
+}
+
+impl Transform {
+    pub fn matrix(&self) -> Affine3A {
+        Affine3A::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
+    }
 }
 
 impl Default for Transform {
@@ -29,7 +35,7 @@ pub struct Object {
     pub id: ObjectId,
     pub name: String,
     pub transform: Transform,
-    pub mesh: Mesh,
+    pub mesh: PolyMesh,
     pub material: MaterialId,
 }
 
@@ -92,7 +98,7 @@ impl Scene {
     pub fn add_object(
         &mut self,
         name: impl Into<String>,
-        mesh: Mesh,
+        mesh: PolyMesh,
     ) -> Result<ObjectId, SceneError> {
         mesh.validate().map_err(SceneError::InvalidMesh)?;
         let id = self.next_object_id;
@@ -105,6 +111,23 @@ impl Scene {
             material: Self::DEFAULT_MATERIAL,
         });
         Ok(id)
+    }
+
+    /// Replace an object's mesh, e.g. with the result of a modelling operation.
+    pub fn set_mesh(&mut self, id: ObjectId, mesh: PolyMesh) -> Result<(), SceneError> {
+        mesh.validate().map_err(SceneError::InvalidMesh)?;
+        self.object_mut(id)?.mesh = mesh;
+        Ok(())
+    }
+
+    pub fn duplicate_object(&mut self, id: ObjectId) -> Result<ObjectId, SceneError> {
+        let mut copy = self.object(id)?.clone();
+        copy.id = self.next_object_id;
+        copy.name = format!("{} copy", copy.name);
+        self.next_object_id += 1;
+        let new_id = copy.id;
+        self.objects.push(copy);
+        Ok(new_id)
     }
 
     pub fn remove_object(&mut self, id: ObjectId) -> Result<Object, SceneError> {
@@ -168,11 +191,9 @@ mod tests {
     #[test]
     fn rejects_invalid_mesh() {
         let mut s = Scene::new();
-        let bad = Mesh {
-            positions: vec![Vec3::ZERO],
-            indices: vec![0, 1, 2],
-            ..Default::default()
-        };
+        let mut bad = PolyMesh::default();
+        bad.add_vertex(Vec3::ZERO);
+        bad.add_face(vec![0, 1, 2], false);
         assert!(matches!(
             s.add_object("bad", bad),
             Err(SceneError::InvalidMesh(_))

@@ -1,11 +1,11 @@
 use std::f32::consts::{PI, TAU};
 
-use glam::{Vec2, Vec3};
+use glam::Vec3;
 use serde::{Deserialize, Serialize};
 
-use crate::mesh::Mesh;
+use crate::poly::PolyMesh;
 
-/// Parametric shapes an agent can start from. All are centred on the origin.
+/// Parametric shapes an agent can start from. All are centred on the origin, Y up.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Primitive {
@@ -25,6 +25,17 @@ pub enum Primitive {
         height: f32,
         segments: u32,
     },
+    Cone {
+        radius: f32,
+        height: f32,
+        segments: u32,
+    },
+    Torus {
+        major_radius: f32,
+        minor_radius: f32,
+        segments: u32,
+        tube_segments: u32,
+    },
 }
 
 impl Primitive {
@@ -34,10 +45,12 @@ impl Primitive {
             Primitive::Plane { .. } => "Plane",
             Primitive::UvSphere { .. } => "Sphere",
             Primitive::Cylinder { .. } => "Cylinder",
+            Primitive::Cone { .. } => "Cone",
+            Primitive::Torus { .. } => "Torus",
         }
     }
 
-    pub fn build(&self) -> Mesh {
+    pub fn build(&self) -> PolyMesh {
         match *self {
             Primitive::Cube { size } => cube(size),
             Primitive::Plane { size } => plane(size),
@@ -51,208 +64,203 @@ impl Primitive {
                 height,
                 segments,
             } => cylinder(radius, height, segments.max(3)),
+            Primitive::Cone {
+                radius,
+                height,
+                segments,
+            } => cone(radius, height, segments.max(3)),
+            Primitive::Torus {
+                major_radius,
+                minor_radius,
+                segments,
+                tube_segments,
+            } => torus(
+                major_radius,
+                minor_radius,
+                segments.max(3),
+                tube_segments.max(3),
+            ),
         }
     }
 }
 
-/// Builder that appends flat quads (two triangles) with their own vertices.
-#[derive(Default)]
-struct Builder {
-    mesh: Mesh,
-}
-
-impl Builder {
-    fn vertex(&mut self, p: Vec3, n: Vec3, uv: Vec2) -> u32 {
-        self.mesh.positions.push(p);
-        self.mesh.normals.push(n);
-        self.mesh.uvs.push(uv);
-        (self.mesh.positions.len() - 1) as u32
-    }
-
-    /// Quad with corners in counter-clockwise order when seen from outside.
-    fn quad(&mut self, corners: [Vec3; 4], n: Vec3) {
-        let uvs = [
-            Vec2::new(0.0, 0.0),
-            Vec2::new(1.0, 0.0),
-            Vec2::new(1.0, 1.0),
-            Vec2::new(0.0, 1.0),
-        ];
-        let i: Vec<u32> = corners
-            .iter()
-            .zip(uvs)
-            .map(|(p, uv)| self.vertex(*p, n, uv))
-            .collect();
-        self.mesh
-            .indices
-            .extend_from_slice(&[i[0], i[1], i[2], i[0], i[2], i[3]]);
-    }
-}
-
-pub fn cube(size: f32) -> Mesh {
+pub fn cube(size: f32) -> PolyMesh {
     let h = size / 2.0;
-    let mut b = Builder::default();
-    // For each face: normal, and two tangent axes (u, v) with u × v = normal.
-    let faces = [
-        (Vec3::X, Vec3::NEG_Z, Vec3::Y),
-        (Vec3::NEG_X, Vec3::Z, Vec3::Y),
-        (Vec3::Y, Vec3::X, Vec3::NEG_Z),
-        (Vec3::NEG_Y, Vec3::X, Vec3::Z),
-        (Vec3::Z, Vec3::X, Vec3::Y),
-        (Vec3::NEG_Z, Vec3::NEG_X, Vec3::Y),
-    ];
-    for (n, u, v) in faces {
-        let c = n * h;
-        b.quad(
-            [
-                c - u * h - v * h,
-                c + u * h - v * h,
-                c + u * h + v * h,
-                c - u * h + v * h,
-            ],
-            n,
-        );
+    let mut m = PolyMesh::default();
+    for i in 0..8u32 {
+        let s = |bit: u32| if i & bit != 0 { h } else { -h };
+        m.add_vertex(Vec3::new(s(1), s(2), s(4)));
     }
-    b.mesh
-}
-
-pub fn plane(size: f32) -> Mesh {
-    let h = size / 2.0;
-    let mut b = Builder::default();
-    b.quad(
-        [
-            Vec3::new(-h, 0.0, h),
-            Vec3::new(h, 0.0, h),
-            Vec3::new(h, 0.0, -h),
-            Vec3::new(-h, 0.0, -h),
-        ],
-        Vec3::Y,
-    );
-    b.mesh
-}
-
-pub fn uv_sphere(radius: f32, segments: u32, rings: u32) -> Mesh {
-    let mut m = Mesh::default();
-    for r in 0..=rings {
-        let v = r as f32 / rings as f32;
-        let theta = v * PI;
-        for s in 0..=segments {
-            let u = s as f32 / segments as f32;
-            let phi = u * TAU;
-            let n = Vec3::new(
-                theta.sin() * phi.cos(),
-                theta.cos(),
-                -theta.sin() * phi.sin(),
-            );
-            m.positions.push(n * radius);
-            m.normals.push(n);
-            m.uvs.push(Vec2::new(u, 1.0 - v));
-        }
-    }
-    let row = segments + 1;
-    for r in 0..rings {
-        for s in 0..segments {
-            let a = r * row + s;
-            let b = a + row;
-            if r != 0 {
-                m.indices.extend_from_slice(&[a, b, a + 1]);
-            }
-            if r != rings - 1 {
-                m.indices.extend_from_slice(&[a + 1, b, b + 1]);
-            }
-        }
+    for f in [
+        [1, 3, 7, 5],
+        [0, 4, 6, 2],
+        [2, 6, 7, 3],
+        [0, 1, 5, 4],
+        [4, 5, 7, 6],
+        [0, 2, 3, 1],
+    ] {
+        m.add_face(f.to_vec(), false);
     }
     m
 }
 
-pub fn cylinder(radius: f32, height: f32, segments: u32) -> Mesh {
-    let h = height / 2.0;
-    let mut b = Builder::default();
-    let ring = |i: u32| {
-        let a = i as f32 / segments as f32 * TAU;
-        Vec3::new(a.cos(), 0.0, -a.sin())
-    };
-    // Side wall, smooth-shaded.
-    for i in 0..=segments {
-        let d = ring(i);
-        let u = i as f32 / segments as f32;
-        b.vertex(d * radius - Vec3::Y * h, d, Vec2::new(u, 0.0));
-        b.vertex(d * radius + Vec3::Y * h, d, Vec2::new(u, 1.0));
+pub fn plane(size: f32) -> PolyMesh {
+    let h = size / 2.0;
+    let mut m = PolyMesh::default();
+    for (x, z) in [(-h, h), (h, h), (h, -h), (-h, -h)] {
+        m.add_vertex(Vec3::new(x, 0.0, z));
     }
-    for i in 0..segments {
-        let (b0, t0, b1, t1) = (i * 2, i * 2 + 1, i * 2 + 2, i * 2 + 3);
-        b.mesh.indices.extend_from_slice(&[b0, b1, t1, b0, t1, t0]);
+    m.add_face(vec![0, 1, 2, 3], false);
+    m
+}
+
+/// Unit direction around the Y axis; angle grows counter-clockwise seen from above.
+fn around_y(i: u32, segments: u32) -> Vec3 {
+    let a = i as f32 / segments as f32 * TAU;
+    Vec3::new(a.cos(), 0.0, -a.sin())
+}
+
+pub fn uv_sphere(radius: f32, segments: u32, rings: u32) -> PolyMesh {
+    let mut m = PolyMesh::default();
+    let top = m.add_vertex(Vec3::Y * radius);
+    let ring_start = |r: u32| 1 + (r - 1) * segments;
+    for r in 1..rings {
+        let theta = r as f32 / rings as f32 * PI;
+        for s in 0..segments {
+            let d = around_y(s, segments) * theta.sin() + Vec3::Y * theta.cos();
+            m.add_vertex(d * radius);
+        }
     }
-    // Caps as triangle fans.
-    for (y, n) in [(h, Vec3::Y), (-h, Vec3::NEG_Y)] {
-        let centre = b.vertex(Vec3::Y * y, n, Vec2::splat(0.5));
-        let first = centre + 1;
-        for i in 0..segments {
-            let d = ring(i);
-            b.vertex(
-                d * radius + Vec3::Y * y,
-                n,
-                Vec2::new(0.5 + d.x * 0.5, 0.5 - d.z * 0.5),
+    let bottom = m.add_vertex(-Vec3::Y * radius);
+    let at = |r: u32, s: u32| ring_start(r) + s % segments;
+    for s in 0..segments {
+        m.add_face(vec![top, at(1, s), at(1, s + 1)], true);
+    }
+    for r in 1..rings - 1 {
+        for s in 0..segments {
+            m.add_face(
+                vec![at(r, s), at(r + 1, s), at(r + 1, s + 1), at(r, s + 1)],
+                true,
             );
         }
-        for i in 0..segments {
-            let (p, q) = (first + i, first + (i + 1) % segments);
-            if n.y > 0.0 {
-                b.mesh.indices.extend_from_slice(&[centre, p, q]);
-            } else {
-                b.mesh.indices.extend_from_slice(&[centre, q, p]);
-            }
+    }
+    for s in 0..segments {
+        m.add_face(vec![bottom, at(rings - 1, s + 1), at(rings - 1, s)], true);
+    }
+    m
+}
+
+pub fn cylinder(radius: f32, height: f32, segments: u32) -> PolyMesh {
+    let h = height / 2.0;
+    let mut m = PolyMesh::default();
+    for i in 0..segments {
+        m.add_vertex(around_y(i, segments) * radius - Vec3::Y * h);
+    }
+    for i in 0..segments {
+        m.add_vertex(around_y(i, segments) * radius + Vec3::Y * h);
+    }
+    for i in 0..segments {
+        let j = (i + 1) % segments;
+        m.add_face(vec![i, j, segments + j, segments + i], true);
+    }
+    m.add_face((segments..2 * segments).collect(), false);
+    m.add_face((0..segments).rev().collect(), false);
+    m
+}
+
+pub fn cone(radius: f32, height: f32, segments: u32) -> PolyMesh {
+    let h = height / 2.0;
+    let mut m = PolyMesh::default();
+    for i in 0..segments {
+        m.add_vertex(around_y(i, segments) * radius - Vec3::Y * h);
+    }
+    let apex = m.add_vertex(Vec3::Y * h);
+    for i in 0..segments {
+        m.add_face(vec![i, (i + 1) % segments, apex], true);
+    }
+    m.add_face((0..segments).rev().collect(), false);
+    m
+}
+
+pub fn torus(major: f32, minor: f32, segments: u32, tube: u32) -> PolyMesh {
+    let mut m = PolyMesh::default();
+    for i in 0..segments {
+        let d = around_y(i, segments);
+        for j in 0..tube {
+            let b = j as f32 / tube as f32 * TAU;
+            m.add_vertex(d * (major + minor * b.cos()) + Vec3::Y * minor * b.sin());
         }
     }
-    b.mesh
+    let at = |i: u32, j: u32| (i % segments) * tube + j % tube;
+    for i in 0..segments {
+        for j in 0..tube {
+            m.add_face(
+                vec![at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)],
+                true,
+            );
+        }
+    }
+    m
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Every triangle's winding should agree with its vertex normals (faces point outward).
-    fn assert_outward(m: &Mesh) {
-        for tri in m.indices.chunks_exact(3) {
-            let [a, b, c] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
-            let face = (m.positions[b] - m.positions[a]).cross(m.positions[c] - m.positions[a]);
-            if face.length_squared() < 1e-12 {
-                continue;
-            }
-            let avg = m.normals[a] + m.normals[b] + m.normals[c];
-            assert!(face.dot(avg) > 0.0, "triangle {tri:?} faces inward");
-        }
+    fn check(p: Primitive, expected_volume: f32) {
+        let m = p.build();
+        m.validate().unwrap();
+        assert!(m.is_closed_manifold(), "{p:?} is not closed");
+        let v = m.volume();
+        assert!(
+            (v - expected_volume).abs() / expected_volume < 0.05,
+            "{p:?}: volume {v}, expected {expected_volume}"
+        );
+        m.to_mesh().validate().unwrap();
     }
 
     #[test]
-    fn cube_is_valid_and_sized() {
-        let m = cube(2.0);
-        m.validate().unwrap();
-        assert_eq!(m.triangle_count(), 12);
-        assert_eq!(m.bounds().unwrap().size(), Vec3::splat(2.0));
-        assert_outward(&m);
-    }
-
-    #[test]
-    fn sphere_is_valid() {
-        let m = uv_sphere(1.0, 16, 8);
-        m.validate().unwrap();
-        assert!((m.bounds().unwrap().size() - Vec3::splat(2.0)).length() < 1e-4);
-        assert_outward(&m);
-    }
-
-    #[test]
-    fn cylinder_is_valid() {
-        let m = cylinder(0.5, 2.0, 12);
-        m.validate().unwrap();
-        assert!((m.bounds().unwrap().size() - Vec3::new(1.0, 2.0, 1.0)).length() < 1e-4);
-        assert_outward(&m);
+    fn closed_primitives_have_outward_faces_and_right_volume() {
+        check(Primitive::Cube { size: 2.0 }, 8.0);
+        check(
+            Primitive::UvSphere {
+                radius: 1.0,
+                segments: 64,
+                rings: 32,
+            },
+            4.0 / 3.0 * PI,
+        );
+        check(
+            Primitive::Cylinder {
+                radius: 1.0,
+                height: 2.0,
+                segments: 64,
+            },
+            2.0 * PI,
+        );
+        check(
+            Primitive::Cone {
+                radius: 1.0,
+                height: 3.0,
+                segments: 64,
+            },
+            PI,
+        );
+        check(
+            Primitive::Torus {
+                major_radius: 2.0,
+                minor_radius: 0.5,
+                segments: 64,
+                tube_segments: 32,
+            },
+            2.0 * PI * PI * 2.0 * 0.25,
+        );
     }
 
     #[test]
     fn plane_faces_up() {
         let m = plane(1.0);
-        m.validate().unwrap();
-        assert_outward(&m);
+        assert!(m.face_normal(&m.faces[0]).abs_diff_eq(Vec3::Y, 1e-6));
     }
 
     #[test]

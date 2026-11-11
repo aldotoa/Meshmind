@@ -11,7 +11,7 @@
     "windows": [
       { "title": "MeshMind", "width": 1280, "height": 800, "minWidth": 800, "minHeight": 500 }
     ],
-    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'" }
+    "security": { "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:" }
   },
   "bundle": {
     "active": true,

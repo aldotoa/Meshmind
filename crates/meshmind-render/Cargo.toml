@@ -1,0 +1,13 @@
+[package]
+name = "meshmind-render"
+description = "Headless software renderer for MeshMind previews"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+meshmind-core.workspace = true
+glam.workspace = true
+png = "0.17"

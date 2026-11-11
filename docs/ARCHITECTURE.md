@@ -55,8 +55,8 @@ watches, reviews, and steers.
 |---|---|
 | `crates/meshmind-core` | Pure Rust engine with no UI: scene graph, meshes, PBR materials, mesh operations, undo stack, glTF/FBX/OBJ export. Fully unit-tested. |
 | `crates/meshmind-mcp` | MCP server. Exposes core operations as tools. Runs standalone (`meshmind-mcp` binary over stdio) or embedded in the desktop app. |
-| `apps/desktop` | Tauri v2 app. Embeds the MCP server, shows the live scene in a WebGPU viewport, lists the agent's actions, and lets the person undo or approve. |
-| `crates/meshmind-render` *(step 2)* | Headless `wgpu` renderer used by `render_preview` and for texture baking. |
+| `apps/desktop` | Tauri v2 app. Embeds the MCP server (HTTP on `127.0.0.1:7878`), shows the live scene with three.js (PBR, soft shadows, environment lighting), and lets the person undo and redo. |
+| `crates/meshmind-render` | CPU software renderer used by `render_preview`. Needs no GPU, so it works in CI and on any machine. A GPU path for texture baking may follow in step 3. |
 | `plugins/*` *(step 3)* | Optional extras, such as local image-to-3D models (TRELLIS, Hunyuan3D) for a fast rough first shape. |
 
 ## How an agent connects
@@ -82,18 +82,28 @@ watches, reviews, and steers.
 - **Scene**: a flat list of objects for now (parent/child links come with
   grouping). Each object has a stable id, a name, a transform
   (translation, rotation quaternion, scale), a mesh, and a material id.
-- **Mesh**: indexed triangles with positions, normals, and UVs. Editing ops
-  that need adjacency (bevel, inset) will use a half-edge structure
-  internally and convert back.
+- **PolyMesh** (source of truth): welded vertices and n-gon faces, each
+  flagged smooth or flat. All modelling ops work on it and return a new
+  mesh, which makes undo simple (scene snapshots).
+- **Mesh**: triangles with normals and UVs, derived from the PolyMesh for
+  rendering and export. UVs are a box projection until step 3's unwrapping.
 - **Material**: metallic-roughness PBR, matching glTF 2.0, so exports open
   correctly in Unity, Unreal, Godot, and Blender.
 
+## Known limitations (step 2)
+
+- `bevel` is a single-segment chamfer of hard edges. On meshes that mix hard
+  and soft edges at one vertex it can leave T-junctions.
+- `boolean` (BSP, after csg.js) needs closed inputs and can produce thin
+  slivers; results are welded but not retopologised.
+- The software preview has no shadows or reflections; the desktop viewer does.
+
 ## Roadmap
 
-1. **Architecture and skeleton** (this step): workspace, core types,
+1. **Architecture and skeleton** (done): workspace, core types,
    primitives, a working MCP server with basic scene tools, Tauri shell, CI.
-2. **Core engine and tools**: mesh editing ops, undo stack, glTF export,
-   headless preview rendering, live viewer.
+2. **Core engine and tools** (done): mesh editing ops, booleans, undo stack,
+   glTF export, headless preview rendering, live viewer, HTTP transport.
 3. **AAA quality layer**: smart materials, UV unwrapping, baking, lighting,
    optional image-to-3D plugins.
 4. **Polish and launch**: docs, example prompts, signed releases, demo.
