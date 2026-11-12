@@ -55,7 +55,7 @@ barrel and a potion bottle are built, tool call by tool call.
 | Shape | `deform` (bend, twist, taper), `move_vertices`, `slice`, `extrude`, `inset`, `bevel`, `subdivide`, `boolean` (union, difference, intersection), `mirror`, `array`, `set_shading` |
 | Scene | `list_objects`, `get_object`, `set_transform`, `duplicate_object`, `delete_object`, `clear_scene`, `undo`, `redo` |
 | Look | `apply_smart_material` (painted, bare, rusty and polished metal, gold, bronze, glass, gemstone, ceramic, fabric, leather, bone, plastic, wood, stone, rubber), `set_material`, `unwrap_uvs`, `set_lighting` |
-| Review | `render_preview` returns studio-lit images (with close-ups via `focus`) the agent looks at to check its own work |
+| Review | `render_preview` returns studio-lit images (with close-ups via `focus`) the agent looks at to check its own work, and `check_asset` lists what a reviewer would flag |
 | Files | `export_glb` (glTF 2.0 with textures), `save_project` and `open_project` (`.meshmind`) |
 
 Smart materials are baked from the shape: paint chips off convex edges, grime

@@ -21,6 +21,10 @@ All notable changes are listed here. The format follows
 - Smart materials `glass`, `gemstone`, `bronze` (verdigris patina),
   `fabric` (woven), `ceramic` (glazed, crackled, chips show clay) and `bone`
   (also ivory and horn).
+- `check_asset`: lists what a reviewer would flag (grey parts, stale
+  materials, floating or detached parts, default names, triangle budget).
+- `review_asset` prompt (art-director critique and fix pass) and a `style`
+  argument for `model_asset` (realistic, stylized, low_poly).
 - Worked recipes in docs/RECIPES.md and scripts/recipes.py: longsword, axe,
   barrel, potion bottle.
 
@@ -34,8 +38,9 @@ All notable changes are listed here. The format follows
   background is darker.
 - Smooth shading keeps edges sharper than 50° crisp (auto-smooth), and
   concave polygons triangulate correctly.
-- The agent guide and the `model_asset` prompt now steer agents to pick a
-  shape tool by silhouette instead of building everything from primitives.
+- The agent guide now walks through planning parts, picking a shape tool by
+  silhouette, every material preset, an art-director review, and common
+  mistakes. docs/AGENTS.md explains how to prompt for the best results.
 
 ### Fixed
 - Viewer: the floor's shadow and grid no longer draw across objects that

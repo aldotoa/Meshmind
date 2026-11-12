@@ -18,7 +18,20 @@ parts and the look you want.
 > Using MeshMind, build a stone pedestal: square base, octagonal column, and a
 > wider top slab, all with chipped edges. Check it under outdoor and night lighting.
 
+> Using MeshMind, build a one-handed longsword about 1 m long: a lens-shaped
+> polished steel blade with a fuller, a slightly curved crossguard, a grip
+> wrapped in dark leather cord with brass ferrules, and a wheel pommel.
+
+> Using MeshMind, make a stylized fantasy health potion: a round glass bottle
+> with red liquid, a cork, and a cord tied round the neck. Style: stylized.
+
+> Using MeshMind, model a low-poly bronze shield with a raised boss and
+> rivets around the rim. Style: low_poly.
+
 ## Iterating
+
+> Review it like an art director and fix what falls short of AAA quality.
+
 
 > The handles look too thin. Make them twice as thick and add a small bevel.
 

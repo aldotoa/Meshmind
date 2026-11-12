@@ -102,6 +102,10 @@ Move or scale the vertices of an object inside a world-space box, for shaping de
 
 List all objects with id, name, transform, world-space size and bounding box, face count and material.
 
+## `check_asset`
+
+Check the scene for problems a reviewer would spot, and get a list of fixes: parts left with the default grey material, materials made stale by later shape edits, parts floating free of the rest or the model not standing on the ground, default names, and a triangle count against typical game budgets. Call it before you call the asset done, alongside render_preview.
+
 ## `get_object`
 
 Details of one object, including each face's index, centre and normal (local space), so you can pick faces by index for extrude/inset.

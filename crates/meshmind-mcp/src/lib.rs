@@ -14,29 +14,40 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_UNDO: usize = 100;
 
 const INSTRUCTIONS: &str = "MeshMind is a 3D modelling engine you drive with tools. Units are metres, Y is up, \
-the ground is y = 0, and objects are created centred on the origin. A good workflow:\n\
-1. Block out: build each part with the shape tool that matches it, place it with set_transform, and check \
-proportions with render_preview before adding detail. Boxes and plain cylinders look like placeholders, so \
-use them only for boxy parts. Pick the tool by the part's silhouette:\n\
-   - loft: anything that changes cross-section along its length (blades, horns, handles, legs, spires, \
+the ground is y = 0, and objects are created centred on the origin. Aim for game-ready, AAA-looking assets. \
+Work like a professional 3D artist:\n\
+1. Plan: decide the real-world size in metres and list the parts (a sword: blade, guard, grip, wrap, ferrules, \
+pommel). Real objects are made of many separate parts; one object per part.\n\
+2. Block out: build each part with the shape tool that matches its silhouette, place it with set_transform, \
+and check proportions with render_preview before adding detail. Boxes and plain cylinders look like \
+placeholders, so use create_primitive only for boxy parts.\n\
+   - loft: parts whose cross-section changes along their length (blades, horns, handles, legs, spires, \
      fins). A concave cross-section gives grooves such as a sword's fuller.\n\
-   - lathe: anything round (pommels, knobs, bottles, vases, wheels, columns, lamp bases).\n\
+   - lathe: round parts (pommels, knobs, bottles, vases, barrels, wheels, columns, lamp bases).\n\
    - extrude_outline: flat parts with a distinctive silhouette (axe heads, shields, brackets, gears).\n\
    - sweep: tubes along a path (rope, cables, pipes, rings, chains, cord or leather wrapped round a grip).\n\
    - deform (bend, twist, taper) and move_vertices: curve, twist or reshape a part after creating it.\n\
-2. Detail: inset then extrude (using the returned inner_faces) for panels and recesses, boolean for holes \
-and cut-outs, array and mirror for repeated parts. Separate small parts (rings, rivets, ferrules, straps) \
-add a lot of realism.\n\
-3. Finish shape: bevel hard edges (small amounts, 2 to 3 segments) so they catch light. Do this before \
-materials, because any geometry edit clears UVs and baked textures.\n\
-4. Surface: apply_smart_material per object (edge wear, grime and normal maps are baked from the shape). \
-polished_metal for blades and armour, gold for brass and gold trim, leather for grips and straps. Use \
-set_material only for flat colours or emissive parts.\n\
-5. Review: render_preview from several views and lighting presets, and use `focus` for close-ups of small \
-parts; fix anything that looks wrong.\n\
-6. Deliver: export_glb for game engines, and save_project so the work can be continued later.\n\
-Every change can be undone. Prompts named model_asset and refine_asset describe this workflow in detail, and \
-docs/RECIPES.md in the MeshMind repository shows worked examples (sword, axe, barrel, potion bottle).";
+3. Detail: inset then extrude (using the returned inner_faces) for panels and recesses, boolean for holes \
+and cut-outs, array and mirror for repeats. Small trim parts (rings, rivets, ferrules, straps, hinges) add \
+a lot of realism.\n\
+4. Finish shape: bevel hard edges (1 to 3% of the part's size, 2 to 3 segments) so they catch light. Shape \
+first, materials last: any geometry edit clears UVs and baked textures.\n\
+5. Surface: apply_smart_material on every part; it bakes edge wear, grime and a normal map from the shape. \
+Presets: polished_metal (blades, armour, chrome), bare_metal (cast or machined parts), painted_metal, \
+rusty_metal, gold (also brass), bronze (patina), wood, leather (grips, straps), fabric (cloth, sacks, \
+banners), stone (also concrete), ceramic (pottery, tiles), bone (also ivory, horn), plastic, rubber, glass \
+and gemstone (see-through; color tints them). Pick colours with color_hex and keep wear and dirt believable: \
+0.2 to 0.4 for used items, higher only for battered ones. Use set_material only for flat colours, glowing \
+parts (emissive) or custom glass (transmission, ior).\n\
+6. Review like an art director: render_preview from several views under at least two lighting presets, use \
+`focus` for close-ups of small parts, and call check_asset. Fix floating or intersecting parts, wrong \
+proportions, grey parts and stale materials, then look again.\n\
+7. Deliver: export_glb for game engines, and save_project so the work can be continued later.\n\
+Common mistakes: everything built from cubes and cylinders; one object for the whole model; parts hovering \
+just off each other; the model not standing on y = 0; skipping bevels; wear or dirt at 1.0 on everything; \
+editing shape after materials without re-applying them. Every change can be undone. Prompts model_asset, \
+refine_asset and review_asset describe these workflows, and docs/RECIPES.md in the MeshMind repository shows \
+worked examples (sword, axe, barrel, potion bottle).";
 
 /// Prompt templates the user's agent can offer (MCP `prompts`).
 fn prompts() -> Value {
@@ -47,7 +58,8 @@ fn prompts() -> Value {
             "description": "Build a game-ready 3D model from a description, with materials, and export it.",
             "arguments": [
                 { "name": "description", "description": "What to build, e.g. 'a rusty oil barrel with two metal bands'.", "required": true },
-                { "name": "output", "description": "Where to save the .glb (default: asset.glb).", "required": false }
+                { "name": "output", "description": "Where to save the .glb (default: asset.glb).", "required": false },
+                { "name": "style", "description": "realistic (default), stylized (hand-painted, chunky shapes) or low_poly.", "required": false }
             ]
         },
         {
@@ -56,6 +68,14 @@ fn prompts() -> Value {
             "description": "Review the model in the scene and improve it step by step.",
             "arguments": [
                 { "name": "feedback", "description": "What to change, e.g. 'make the handles thicker and the paint more worn'.", "required": true }
+            ]
+        },
+        {
+            "name": "review_asset",
+            "title": "Review and polish the current model",
+            "description": "Critique the model like an art director, then fix what falls short of AAA quality.",
+            "arguments": [
+                { "name": "focus", "description": "Optional area to look at hardest, e.g. 'the hilt' or 'materials'.", "required": false }
             ]
         }
     ])
@@ -78,21 +98,29 @@ fn get_prompt(params: &Value) -> Result<Value, (i64, String)> {
             let description = arg("description")
                 .ok_or((-32602, "argument `description` is required".to_string()))?;
             let output = arg("output").unwrap_or_else(|| "asset.glb".into());
+            let style = match arg("style").as_deref() {
+                Some("stylized") => "Style: stylized, like a hand-painted fantasy game. Exaggerate proportions \
+                    slightly (chunkier, bolder shapes), use bigger bevels, saturated colours and low dirt (0.1).",
+                Some("low_poly") => "Style: low-poly. Use few segments (6 to 8 round, 3 to 4 stations per loft), \
+                    flat shading where facets read well, no subdivision, and clean flat colours with light wear.",
+                _ => "Style: realistic. Real-world proportions, small bevels, believable wear (0.2 to 0.4).",
+            };
             format!(
-                "Using the MeshMind tools, model this game asset: {description}\n\n\
+                "Using the MeshMind tools, model this game asset: {description}\n{style}\n\n\
                  Work like a professional 3D artist:\n\
-                 1. Decide the real-world size in metres and the main parts. Start with clear_scene.\n\
+                 1. Decide the real-world size in metres and list the parts. Start with clear_scene.\n\
                  2. Block out each part with the shape tool that fits its silhouette (loft for tapering \
                  parts, lathe for round parts, extrude_outline for flat silhouettes, sweep for tubes and \
                  wraps; create_primitive only for boxy parts) and place it with set_transform, giving \
                  every object a descriptive name. Call render_preview and fix proportions before adding detail.\n\
-                 3. Add detail: inset + extrude for panels, boolean for holes, array/mirror for repeats.\n\
+                 3. Add detail: inset + extrude for panels, boolean for holes, array/mirror for repeats, \
+                 and small trim parts (rings, rivets, straps).\n\
                  4. Bevel hard edges slightly (2-3 segments) so they catch light.\n\
-                 5. apply_smart_material on each part with a fitting preset and colour.\n\
-                 6. render_preview under at least two lighting presets, plus close-ups of small parts with \
-                 `focus`, then fix anything that looks off.\n\
+                 5. apply_smart_material on every part with a fitting preset and colour.\n\
+                 6. Review: render_preview under at least two lighting presets, close-ups of small parts \
+                 with `focus`, and check_asset. Fix everything it finds and look again.\n\
                  7. export_glb to {output} and save_project next to it (same name, .meshmind).\n\
-                 Finish with a short summary of what you built."
+                 Finish with a short summary of what you built, its size and triangle count."
             )
         }
         "refine_asset" => {
@@ -103,6 +131,20 @@ fn get_prompt(params: &Value) -> Result<Value, (i64, String)> {
                  First call list_objects and render_preview to see what exists. Make the changes with \
                  the smallest edits that work, and re-apply smart materials to any object whose shape \
                  you changed. Check the result with render_preview, and use undo if a step made things worse."
+            )
+        }
+        "review_asset" => {
+            let focus = arg("focus")
+                .map(|f| format!(" Look hardest at {f}."))
+                .unwrap_or_default();
+            format!(
+                "Using the MeshMind tools, review the current model like an art director and bring it up                  to AAA quality.{focus}
+
+                 1. Call list_objects, check_asset, and render_preview from the front, the side and                  three_quarter under studio and outdoor lighting, plus close-ups of small parts with `focus`.
+                 2. Write a short critique: silhouette (is it recognisable at a glance?), proportions against                  the real object, detail density (are there enough separate parts and trim?), edges (bevelled?),                  materials (right preset, believable colour, wear and dirt?), and anything floating,                  intersecting or grey.
+                 3. Fix the three most important problems, re-applying materials to any part you reshape.
+                 4. Render again and compare. Use undo if a change made things worse.
+                 Finish with what you changed and what you would improve next."
             )
         }
         _ => return Err((-32602, format!("unknown prompt: {name}"))),

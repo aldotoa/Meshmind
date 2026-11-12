@@ -33,6 +33,7 @@ pub fn is_mutating(name: &str) -> bool {
         name,
         "list_objects"
             | "get_object"
+            | "check_asset"
             | "render_preview"
             | "export_glb"
             | "save_project"
@@ -168,6 +169,13 @@ pub fn definitions() -> Value {
             &["id", "min", "max"]),
         tool("list_objects",
             "List all objects with id, name, transform, world-space size and bounding box, face count and material.",
+            json!({}), &[]),
+        tool("check_asset",
+            "Check the scene for problems a reviewer would spot, and get a list of fixes: parts left \
+             with the default grey material, materials made stale by later shape edits, parts \
+             floating free of the rest or the model not standing on the ground, default names, and \
+             a triangle count against typical game budgets. Call it before you call the asset done, \
+             alongside render_preview.",
             json!({}), &[]),
         tool("get_object",
             "Details of one object, including each face's index, centre and normal (local space), \
@@ -354,6 +362,7 @@ pub fn call(scene: &mut Scene, name: &str, args: &Value) -> Option<Result<ToolOu
         }),
         "move_vertices" => move_vertices(scene, args).map(Into::into),
         "list_objects" => Ok(list_objects(scene).into()),
+        "check_asset" => Ok(check_asset(scene).into()),
         "get_object" => get_object(scene, args).map(Into::into),
         "set_transform" => set_transform(scene, args).map(Into::into),
         "duplicate_object" => object_id(args, "id")
@@ -861,6 +870,113 @@ fn move_vertices(scene: &mut Scene, args: &Value) -> Result<Value, String> {
         out["note"] = json!("This object's baked textures no longer match its shape. Call apply_smart_material again when the shape is final.");
     }
     Ok(out)
+}
+
+/// Problems a reviewer would spot, each with the fix.
+fn check_asset(scene: &Scene) -> Value {
+    let mut issues: Vec<Value> = Vec::new();
+    let mut issue = |id: Option<u32>, kind: &str, message: String| {
+        issues.push(json!({ "object": id, "kind": kind, "message": message }));
+    };
+    let objects = scene.objects();
+    if objects.is_empty() {
+        return json!({ "ok": false, "issues": [{ "object": null, "kind": "empty", "message": "The scene is empty." }], "triangles": 0 });
+    }
+    let mut boxes = Vec::new();
+    let mut triangles = 0usize;
+    for o in objects {
+        let world = o.mesh.transformed(&o.transform.matrix());
+        let tris = world.to_mesh().triangle_count();
+        triangles += tris;
+        if let Some(b) = world.bounds() {
+            boxes.push((o.id, b));
+        }
+        if o.material == Scene::DEFAULT_MATERIAL {
+            issue(Some(o.id), "no_material", format!(
+                "`{}` still has the default grey material. Give it apply_smart_material (or set_material for glowing or flat-colour parts).",
+                o.name
+            ));
+        } else if let Ok(m) = scene.material(o.material) {
+            if m.textures.is_some() && !o.mesh.has_uvs() {
+                issue(Some(o.id), "stale_material", format!(
+                    "`{}` was reshaped after its material was baked, so its textures no longer fit. Call apply_smart_material again.",
+                    o.name
+                ));
+            }
+        }
+        let default_names = [
+            "Cube", "Plane", "Sphere", "Cylinder", "Cone", "Torus", "Loft", "Lathe", "Outline",
+            "Tube", "Object",
+        ];
+        let base = o
+            .name
+            .trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ' || c == '.');
+        if default_names.contains(&base) {
+            issue(Some(o.id), "default_name", format!(
+                "`{}` has a default name. Name it after what it is (\"Blade\", \"Lid hinge\") so the model is easy to work with in a game engine.",
+                o.name
+            ));
+        }
+        if tris > 50_000 {
+            issue(Some(o.id), "heavy", format!(
+                "`{}` has {tris} triangles. Lower `segments` or subdivision levels unless it is a hero asset.",
+                o.name
+            ));
+        }
+    }
+    let (lo, hi) = boxes.iter().fold(
+        (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+        |(lo, hi), (_, b)| (lo.min(b.min), hi.max(b.max)),
+    );
+    let size = (hi - lo).max_element().max(1e-6);
+    let tol = size * 0.01;
+    if lo.y > tol {
+        issue(None, "floating", format!(
+            "The model's lowest point is {:.3} m above the ground (y = 0). Move it down so it stands on the ground.",
+            lo.y
+        ));
+    } else if lo.y < -tol {
+        issue(None, "below_ground", format!(
+            "The model reaches {:.3} m below the ground (y = 0). Move it up so it stands on the ground, unless that is intended.",
+            -lo.y
+        ));
+    }
+    if boxes.len() > 1 {
+        for (i, (id, b)) in boxes.iter().enumerate() {
+            let touches = boxes.iter().enumerate().any(|(j, (_, c))| {
+                i != j
+                    && b.min.x <= c.max.x + tol
+                    && c.min.x <= b.max.x + tol
+                    && b.min.y <= c.max.y + tol
+                    && c.min.y <= b.max.y + tol
+                    && b.min.z <= c.max.z + tol
+                    && c.min.z <= b.max.z + tol
+            });
+            if !touches {
+                let name = scene
+                    .object(*id)
+                    .map(|o| o.name.clone())
+                    .unwrap_or_default();
+                issue(Some(*id), "detached", format!(
+                    "`{name}` doesn't touch any other part. If it belongs to the same asset, move it into place."
+                ));
+            }
+        }
+    }
+    let budget = match triangles {
+        0..=2_000 => "very light: fine for small props and mobile",
+        2_001..=20_000 => "typical for a game prop",
+        20_001..=100_000 => "heavy: fine for a hero asset, high for a background prop",
+        _ => "very heavy for a game asset: reduce segments and subdivision",
+    };
+    json!({
+        "ok": issues.is_empty(),
+        "issues": issues,
+        "objects": objects.len(),
+        "triangles": triangles,
+        "triangle_budget": budget,
+        "size": (hi - lo).to_array(),
+    })
 }
 
 fn object_summary(o: &meshmind_core::Object) -> Value {

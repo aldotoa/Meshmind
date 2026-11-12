@@ -621,3 +621,87 @@ fn glass_materials_are_see_through() {
     );
     assert_eq!(r["isError"], false, "{r}");
 }
+
+#[test]
+fn check_asset_finds_common_mistakes() {
+    let mut s = Server::new();
+    let r = call(&mut s, "check_asset", json!({}));
+    assert_eq!(r["structuredContent"]["ok"], false);
+
+    let cube = call(&mut s, "create_primitive", json!({ "shape": "cube" }))["structuredContent"]
+        ["id"]
+        .clone();
+    let ball = call(
+        &mut s,
+        "create_primitive",
+        json!({ "shape": "sphere", "radius": 0.2 }),
+    )["structuredContent"]["id"]
+        .clone();
+    call(
+        &mut s,
+        "set_transform",
+        json!({ "id": ball, "translation": [3, 2, 0] }),
+    );
+    let r = call(&mut s, "check_asset", json!({}))["structuredContent"].clone();
+    let kinds: Vec<&str> = r["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    for k in ["no_material", "default_name", "below_ground", "detached"] {
+        assert!(kinds.contains(&k), "missing {k} in {r}");
+    }
+
+    // A tidy model passes.
+    call(&mut s, "delete_object", json!({ "id": ball }));
+    let crate_ = call(
+        &mut s,
+        "create_primitive",
+        json!({ "shape": "cube", "name": "Crate" }),
+    )["structuredContent"]["id"]
+        .clone();
+    call(&mut s, "delete_object", json!({ "id": cube }));
+    call(
+        &mut s,
+        "set_transform",
+        json!({ "id": crate_, "translation": [0, 0.5, 0] }),
+    );
+    call(
+        &mut s,
+        "apply_smart_material",
+        json!({ "id": crate_, "preset": "wood", "resolution": 256 }),
+    );
+    let r = call(&mut s, "check_asset", json!({}))["structuredContent"].clone();
+    assert_eq!(r["ok"], true, "{r}");
+
+    // Reshaping after the material makes it stale.
+    call(&mut s, "bevel", json!({ "id": crate_, "amount": 0.02 }));
+    let r = call(&mut s, "check_asset", json!({}))["structuredContent"].clone();
+    assert_eq!(r["issues"][0]["kind"], "stale_material", "{r}");
+}
+
+#[test]
+fn review_prompt_and_styles() {
+    let mut s = Server::new();
+    let got = rpc(
+        &mut s,
+        1,
+        "prompts/get",
+        json!({ "name": "review_asset", "arguments": { "focus": "the hilt" } }),
+    );
+    let text = got["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("the hilt") && text.contains("check_asset"));
+    let got = rpc(
+        &mut s,
+        2,
+        "prompts/get",
+        json!({ "name": "model_asset", "arguments": { "description": "a shield", "style": "low_poly" } }),
+    );
+    let text = got["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("low-poly"));
+}

@@ -105,12 +105,41 @@ In `~/.gemini/settings.json`:
 - Streamable HTTP: `http://127.0.0.1:7878/mcp` (desktop app, or
   `meshmind-mcp --http 7878`).
 
+## Getting AAA results
+
+MeshMind tells every agent how to work the moment it connects: plan the
+parts and real-world size, build each part with the shape tool that fits its
+silhouette (loft, lathe, extrude_outline, sweep), add trim, bevel, apply
+smart materials last, then review its own renders and fix what it sees. You
+don't need to explain any of that, but you get better models when your
+prompt gives:
+
+- **Size and parts**: "a one-handed longsword about 1 m long: lens-shaped
+  blade with a fuller, curved crossguard, leather-wrapped grip, wheel pommel".
+- **Materials and age**: "polished steel blade, brass guard, dark brown
+  leather, lightly used".
+- **Style**: realistic, stylized (hand-painted fantasy) or low-poly.
+
+Three prompt templates package this up. In Claude Code they appear as
+`/mcp__meshmind__model_asset` and so on:
+
+| Prompt | Use it to |
+|---|---|
+| `model_asset` | Build a new asset from a description, with an optional `style` (realistic, stylized, low_poly) and output file. |
+| `refine_asset` | Make a specific change to the current model. |
+| `review_asset` | Have the agent critique the model like an art director and fix the three biggest problems. Run it once or twice at the end. |
+
+The agent also has `check_asset`, which lists problems a reviewer would
+spot (grey parts, stale materials, parts floating free, the model not on
+the ground, default names, triangle count against game budgets), and
+`render_preview` with `focus` for close-ups.
+
 ## Tips
 
 - Agents that can read images get much better results, because
   `render_preview` lets them see and fix their own work.
-- MeshMind offers two prompt templates, `model_asset` and `refine_asset`.
-  In Claude Code they appear as `/mcp__meshmind__model_asset`.
+- If a result looks basic, ask "review it like an art director and fix
+  what falls short" (or run `review_asset`) before asking for specific fixes.
 - See [RECIPES.md](RECIPES.md) for worked examples (a longsword, an axe, a
   barrel and a potion bottle), [EXAMPLES.md](EXAMPLES.md) for prompts that
   work well, and
