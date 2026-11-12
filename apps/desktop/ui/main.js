@@ -119,7 +119,7 @@ async function buildObject(o) {
   g.setIndex(o.indices);
   const m = o.material ?? {};
   const [r, gr, b, a] = m.base_color ?? [0.8, 0.8, 0.8, 1];
-  const mat = new THREE.MeshStandardMaterial({
+  const params = {
     color: new THREE.Color(r, gr, b), // linear values, as stored by the engine
     metalness: m.metallic ?? 0,
     roughness: m.roughness ?? 0.5,
@@ -128,7 +128,12 @@ async function buildObject(o) {
     opacity: a,
     side: THREE.DoubleSide,
     wireframe,
-  });
+  };
+  // See-through materials (glass, gems) use three.js's physical transmission.
+  const clear = (m.transmission ?? 0) > 0;
+  const mat = clear
+    ? new THREE.MeshPhysicalMaterial({ ...params, transmission: m.transmission, ior: m.ior ?? 1.5, thickness: 0.02 })
+    : new THREE.MeshStandardMaterial(params);
   if (o.textured) {
     const tex = await texturesFor(o.material_id);
     if (tex) {

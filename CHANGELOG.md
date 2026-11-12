@@ -15,6 +15,12 @@ All notable changes are listed here. The format follows
 - Smart materials `polished_metal` (brushed, scratched, mirror-like), `gold`
   (also brass and bronze, tarnished in creases) and `leather`.
 - `render_preview` takes `focus` (object ids) for close-ups.
+- See-through materials: `transmission` and `ior` on materials (`set_material`),
+  rendered with refraction in the preview, shown in the viewer, and exported
+  as glTF `KHR_materials_transmission` and `KHR_materials_ior`.
+- Smart materials `glass`, `gemstone`, `bronze` (verdigris patina),
+  `fabric` (woven), `ceramic` (glazed, crackled, chips show clay) and `bone`
+  (also ivory and horn).
 - Worked recipes in docs/RECIPES.md and scripts/recipes.py: longsword, axe,
   barrel, potion bottle.
 

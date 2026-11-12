@@ -70,8 +70,7 @@ watches, reviews, and steers.
 
 The tools that exist today are listed in [TOOLS.md](TOOLS.md), which is
 generated from the definitions agents see. Planned additions: `group`,
-`scene_stats` (poly count, UV coverage, problems), glass and transparency,
-and FBX/OBJ export.
+`scene_stats` (poly count, UV coverage, problems), and FBX/OBJ export.
 
 Project files (`.meshmind`) are JSON holding the editable scene, with baked
 textures as base64 PNG. The desktop app autosaves to its data folder shortly
@@ -126,7 +125,8 @@ after every change and restores the last session at startup.
   curved parts get more seams than a hand unwrap would.
 - Any geometry edit clears UVs; the agent must re-apply smart materials
   once the shape is final (the tool result says so).
-- No glass or transparency yet.
+- Glass in the preview is approximate: one refraction offset per surface,
+  no caustics or total internal reflection.
 - Image-to-3D plugins are not built yet.
 
 ## Roadmap

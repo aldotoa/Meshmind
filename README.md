@@ -54,7 +54,7 @@ barrel and a potion bottle are built, tool call by tool call.
 | Create | `loft` (blades, handles, horns), `lathe` (round parts), `extrude_outline` (flat silhouettes), `sweep` (tubes, rope, grip wraps), `create_primitive` |
 | Shape | `deform` (bend, twist, taper), `move_vertices`, `slice`, `extrude`, `inset`, `bevel`, `subdivide`, `boolean` (union, difference, intersection), `mirror`, `array`, `set_shading` |
 | Scene | `list_objects`, `get_object`, `set_transform`, `duplicate_object`, `delete_object`, `clear_scene`, `undo`, `redo` |
-| Look | `apply_smart_material` (painted, bare, rusty and polished metal, gold, leather, plastic, wood, stone, rubber), `set_material`, `unwrap_uvs`, `set_lighting` |
+| Look | `apply_smart_material` (painted, bare, rusty and polished metal, gold, bronze, glass, gemstone, ceramic, fabric, leather, bone, plastic, wood, stone, rubber), `set_material`, `unwrap_uvs`, `set_lighting` |
 | Review | `render_preview` returns studio-lit images (with close-ups via `focus`) the agent looks at to check its own work |
 | Files | `export_glb` (glTF 2.0 with textures), `save_project` and `open_project` (`.meshmind`) |
 
@@ -66,8 +66,13 @@ normal map. Full reference: [docs/TOOLS.md](docs/TOOLS.md).
 |---|---|---|---|
 | <img src="docs/images/crate.jpg" alt="Supply crate"> | <img src="docs/images/barrel.jpg" alt="Oil barrel"> | <img src="docs/images/stool.jpg" alt="Wooden stool"> | <img src="docs/images/pedestal.jpg" alt="Stone pedestal"> |
 
+<img src="docs/images/sword-before-after.jpg" alt="A sword built from primitives, and the same sword built with loft, lathe and sweep">
+
+<img src="docs/images/materials-new.jpg" alt="Bronze, ceramic, fabric, bone, glass and gemstone">
+
 Every image above was made with tool calls only, by
-[scripts/render_gallery.py](scripts/render_gallery.py).
+[scripts/render_gallery.py](scripts/render_gallery.py) and
+[scripts/recipes.py](scripts/recipes.py).
 
 ## Headless mode
 

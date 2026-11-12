@@ -133,7 +133,7 @@ def barrel():
 def bottle():
     glass = m("lathe", name="Bottle", segments=40, profile=[
         [0, 0], [0.04, 0], [0.048, 0.008], [0.05, 0.04], [0.045, 0.075], [0.02, 0.1], [0.014, 0.115], [0.014, 0.15], [0.017, 0.153], [0.017, 0.16], [0, 0.16]])["id"]
-    m("set_material", id=glass, base_color_hex="#3b8f4f", metallic=0, roughness=0.08, emissive=[0.0, 0.05, 0.01])
+    m("apply_smart_material", id=glass, preset="glass", color_hex="#9fd8b0")
     cork = m("lathe", name="Cork", segments=24, profile=[[0, 0], [0.012, 0], [0.0135, 0.025], [0, 0.025]])["id"]
     m("set_transform", id=cork, translation=[0, 0.152, 0])
     m("apply_smart_material", id=cork, preset="wood", color_hex="#b08a5a", wear=0.2, scale=0.02)

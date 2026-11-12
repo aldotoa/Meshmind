@@ -584,3 +584,40 @@ fn deform_slice_and_move_vertices() {
     );
     assert_eq!(bad["isError"], true);
 }
+
+#[test]
+fn glass_materials_are_see_through() {
+    let mut s = Server::new();
+    let id = call(
+        &mut s,
+        "create_primitive",
+        json!({ "shape": "sphere", "radius": 0.1 }),
+    )["structuredContent"]["id"]
+        .clone();
+    let r = call(
+        &mut s,
+        "apply_smart_material",
+        json!({ "id": id, "preset": "glass", "resolution": 256 }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let r = call(
+        &mut s,
+        "set_material",
+        json!({ "id": id, "base_color_hex": "#88ccff", "transmission": 1, "ior": 1.33, "roughness": 0.05 }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    for preset in ["bronze", "fabric", "ceramic", "bone", "gemstone"] {
+        let r = call(
+            &mut s,
+            "apply_smart_material",
+            json!({ "id": id, "preset": preset, "resolution": 256 }),
+        );
+        assert_eq!(r["isError"], false, "{preset}: {r}");
+    }
+    let r = call(
+        &mut s,
+        "render_preview",
+        json!({ "views": ["front"], "size": 128 }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+}

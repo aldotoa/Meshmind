@@ -232,9 +232,11 @@ Create a PBR material and assign it to an object. Colors are linear RGB 0 to 1 (
 | `base_color_hex` | string | Colour as sRGB hex, e.g. "#c0392b", instead of `base_color`. |
 | `emissive` | array of number | Glow color, linear RGB. Values above 1 glow brighter. |
 | `id` (required) | integer | Object id. |
+| `ior` | number | Index of refraction for transmissive materials: 1.33 water, 1.5 glass (default), 1.77 ruby, 2.42 diamond. |
 | `metallic` | number |  |
 | `name` | string |  |
 | `roughness` | number |  |
+| `transmission` | number | 1 = clear like glass or water, tinted by base_color; 0 = opaque (default). Use roughness near 0 for clear glass, 0.3+ for frosted. |
 
 ## `unwrap_uvs`
 
@@ -254,7 +256,7 @@ Give an object a realistic, textured material in one step: the surface is unwrap
 | `color_hex` | string | Main colour as sRGB hex, e.g. "#5a6b2e", instead of `color`. |
 | `dirt` | number | Grime in creases and dust: 0 clean, 1 filthy. Default 0.3. |
 | `id` (required) | integer | Object id. |
-| `preset` (required) | one of `painted_metal`, `bare_metal`, `rusty_metal`, `plastic`, `wood`, `stone`, `rubber`, `polished_metal`, `gold`, `leather` | painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass and bronze via color), leather (grips, straps, belts), plastic, wood, stone (also concrete), rubber. |
+| `preset` (required) | one of `painted_metal`, `bare_metal`, `rusty_metal`, `plastic`, `wood`, `stone`, `rubber`, `polished_metal`, `gold`, `leather`, `bronze`, `fabric`, `ceramic`, `bone`, `glass`, `gemstone` | painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass via color), bronze (green verdigris patina in creases), leather (grips, straps, belts), fabric (woven cloth: banners, sacks, upholstery), ceramic (glazed pottery, tiles; chips show clay), bone (also ivory, horn), glass (clear and see-through; color tints it), gemstone (see-through, saturated: ruby by default), plastic, wood, stone (also concrete), rubber. |
 | `resolution` | one of  | Texture size. Default 1024. |
 | `scale` | number | Size of patterns (blotches, wood grain) in metres. Default 0.15. |
 | `seed` | integer | Change for a different random pattern. |

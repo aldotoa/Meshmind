@@ -37,10 +37,22 @@ pub enum Preset {
     Gold,
     /// Leather: pebbled grain, darker in creases, lighter and shinier where worn.
     Leather,
+    /// Bronze with green verdigris in the creases and polished high points.
+    Bronze,
+    /// Woven cloth: banners, sacks, upholstery, clothing.
+    Fabric,
+    /// Glazed ceramic: pottery, tiles. Chips show the clay underneath.
+    Ceramic,
+    /// Bone, ivory or horn: fibrous, porous, stained in the creases.
+    Bone,
+    /// Clear glass, see-through. The colour tints it.
+    Glass,
+    /// A see-through, deeply coloured gem (ruby by default).
+    Gemstone,
 }
 
 impl Preset {
-    pub const ALL: [Preset; 10] = [
+    pub const ALL: [Preset; 16] = [
         Preset::PaintedMetal,
         Preset::BareMetal,
         Preset::RustyMetal,
@@ -51,6 +63,12 @@ impl Preset {
         Preset::PolishedMetal,
         Preset::Gold,
         Preset::Leather,
+        Preset::Bronze,
+        Preset::Fabric,
+        Preset::Ceramic,
+        Preset::Bone,
+        Preset::Glass,
+        Preset::Gemstone,
     ];
 
     pub fn name(self) -> &'static str {
@@ -65,6 +83,12 @@ impl Preset {
             Preset::PolishedMetal => "polished_metal",
             Preset::Gold => "gold",
             Preset::Leather => "leather",
+            Preset::Bronze => "bronze",
+            Preset::Fabric => "fabric",
+            Preset::Ceramic => "ceramic",
+            Preset::Bone => "bone",
+            Preset::Glass => "glass",
+            Preset::Gemstone => "gemstone",
         }
     }
 
@@ -84,6 +108,28 @@ impl Preset {
             Preset::PolishedMetal => Vec3::new(0.78, 0.79, 0.8),
             Preset::Gold => Vec3::new(1.0, 0.71, 0.29),
             Preset::Leather => Vec3::new(0.12, 0.055, 0.025),
+            Preset::Bronze => Vec3::new(0.62, 0.36, 0.17),
+            Preset::Fabric => Vec3::new(0.32, 0.05, 0.04),
+            Preset::Ceramic => Vec3::new(0.7, 0.68, 0.62),
+            Preset::Bone => Vec3::new(0.5, 0.41, 0.27),
+            Preset::Glass => Vec3::new(0.95, 0.99, 0.97),
+            Preset::Gemstone => Vec3::new(0.75, 0.02, 0.06),
+        }
+    }
+
+    /// How see-through the material is (glTF transmission).
+    pub fn transmission(self) -> f32 {
+        match self {
+            Preset::Glass | Preset::Gemstone => 1.0,
+            _ => 0.0,
+        }
+    }
+
+    /// Index of refraction.
+    pub fn ior(self) -> f32 {
+        match self {
+            Preset::Gemstone => 1.77,
+            _ => 1.5,
         }
     }
 }
@@ -468,6 +514,113 @@ fn shade(
                 .lerp(color * 1.6 + Vec3::new(0.015, 0.01, 0.005), wear * 0.5);
             s.roughness = s.roughness * (1.0 - wear) + 0.42 * wear;
             s
+        }
+        Preset::Bronze => {
+            let patina_col = Vec3::new(0.09, 0.32, 0.24).lerp(Vec3::new(0.2, 0.42, 0.33), fine);
+            let mut s = Surface {
+                color: color * (0.9 + 0.15 * mid),
+                metallic: 1.0,
+                roughness: 0.3 + 0.15 * big,
+                height: 0.5 + 0.02 * fine,
+            };
+            let patina = (smoothstep(
+                0.42,
+                0.68,
+                mid * 0.6 + big * 0.3 + cavity * 0.9 + (fine - 0.5) * 0.35,
+            ) * (0.5 + m.dirt))
+                .clamp(0.0, 1.0);
+            s.color = s.color.lerp(patina_col, patina);
+            s.metallic = 1.0 - patina;
+            s.roughness = s.roughness * (1.0 - patina) + 0.85 * patina;
+            s.height += patina * 0.15 * fine;
+            // Handled high points are polished bright.
+            s.color = s.color.lerp(color * 1.2, wear * (1.0 - patina));
+            s.roughness *= 1.0 - wear * 0.5;
+            s
+        }
+        Preset::Fabric => {
+            // A plain weave: threads ~4 mm apart (canvas, burlap; smaller `scale` is finer), projected along the face's main axis.
+            let a = n.abs();
+            let (u, v) = if a.y >= a.x && a.y >= a.z {
+                (p.x, p.z)
+            } else if a.x >= a.z {
+                (p.z, p.y)
+            } else {
+                (p.x, p.y)
+            };
+            let pitch = 0.004 * (m.scale / 0.15).clamp(0.3, 4.0);
+            let (u, v) = (u / pitch, v / pitch);
+            let over = ((u.floor() + v.floor()) as i64).rem_euclid(2) == 0;
+            let warp = (u.fract() * std::f32::consts::PI).sin();
+            let weft = (v.fract() * std::f32::consts::PI).sin();
+            let thread = if over { warp } else { weft };
+            let fuzz = fbm(p * 1500.0 + seed, 2);
+            let mut s = Surface {
+                color: color * (0.7 + 0.3 * thread) * (0.92 + 0.16 * big) * (0.95 + 0.1 * fuzz),
+                metallic: 0.0,
+                roughness: 0.88 + 0.1 * fuzz,
+                height: 0.46 + 0.08 * thread,
+            };
+            // Worn edges fray and fade.
+            s.color = s.color.lerp(s.color * 0.6 + Vec3::splat(0.12), wear * 0.6);
+            s.height -= wear * 0.15;
+            s
+        }
+        Preset::Ceramic => {
+            let clay = Vec3::new(0.42, 0.2, 0.11);
+            // Fine crackle in the glaze.
+            let crack_n = fbm(q * 6.0 + 5.5, 3);
+            let crackle = smoothstep(0.012, 0.0, (crack_n - 0.5).abs());
+            let mut s = Surface {
+                color: color * (0.95 + 0.08 * big),
+                metallic: 0.0,
+                roughness: 0.08 + 0.05 * mid,
+                height: 0.5 - crackle * 0.03,
+            };
+            s.color *= 1.0 - crackle * (0.15 + 0.4 * m.dirt);
+            // Chips expose rough, unglazed clay.
+            s.color = s.color.lerp(clay * (0.9 + 0.2 * fine), wear);
+            s.roughness = s.roughness * (1.0 - wear) + 0.85 * wear;
+            s.height -= wear * 0.4;
+            s
+        }
+        Preset::Bone => {
+            let fibre = fbm(Vec3::new(q.x * 40.0, q.y * 2.0, q.z * 40.0) + seed, 3);
+            let pores = smoothstep(0.62, 0.72, fbm(p * 700.0 + seed, 2));
+            let mut s = Surface {
+                color: color * (0.85 + 0.25 * fibre) * (1.0 - pores * 0.25),
+                metallic: 0.0,
+                roughness: 0.5 + 0.2 * fibre + pores * 0.2,
+                height: 0.5 + (fibre - 0.5) * 0.08 - pores * 0.12,
+            };
+            // Age stains the creases brown.
+            let stain = (cavity * 0.8 + smoothstep(0.55, 0.8, big) * 0.4).min(1.0);
+            s.color = s
+                .color
+                .lerp(color * Vec3::new(0.55, 0.42, 0.25), stain * 0.7);
+            s.color = s.color.lerp(color * 1.15, wear * 0.5);
+            s.roughness = s.roughness * (1.0 - wear) + 0.35 * wear;
+            s
+        }
+        Preset::Glass | Preset::Gemstone => {
+            // Mostly clean and smooth; smudges and fine scratches show in the highlights.
+            let smudge = smoothstep(0.55, 0.85, mid) * 0.12;
+            let base = if m.preset == Preset::Gemstone {
+                0.02
+            } else {
+                0.03
+            };
+            let tone = if m.preset == Preset::Gemstone {
+                0.85 + 0.25 * big
+            } else {
+                1.0
+            };
+            Surface {
+                color: color * tone,
+                metallic: 0.0,
+                roughness: (base + smudge + scratches * 0.3).min(1.0),
+                height: 0.5,
+            }
         }
     };
     // Dirt on top of everything.

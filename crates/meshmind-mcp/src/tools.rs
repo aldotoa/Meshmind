@@ -248,7 +248,10 @@ pub fn definitions() -> Value {
                     "base_color_hex": { "type": "string", "description": "Colour as sRGB hex, e.g. \"#c0392b\", instead of `base_color`." },
                     "metallic": { "type": "number", "minimum": 0, "maximum": 1 },
                     "roughness": { "type": "number", "minimum": 0, "maximum": 1 },
-                    "emissive": vec3_schema("Glow color, linear RGB. Values above 1 glow brighter.") }),
+                    "emissive": vec3_schema("Glow color, linear RGB. Values above 1 glow brighter."),
+                    "transmission": { "type": "number", "minimum": 0, "maximum": 1,
+                        "description": "1 = clear like glass or water, tinted by base_color; 0 = opaque (default). Use roughness near 0 for clear glass, 0.3+ for frosted." },
+                    "ior": { "type": "number", "description": "Index of refraction for transmissive materials: 1.33 water, 1.5 glass (default), 1.77 ruby, 2.42 diamond." } }),
             &["id"]),
         tool("unwrap_uvs",
             "Lay the object's surface flat into texture space (UV unwrapping). apply_smart_material \
@@ -263,7 +266,7 @@ pub fn definitions() -> Value {
              follows them.",
             json!({ "id": id_prop(),
                     "preset": { "type": "string", "enum": Preset::ALL.map(|p| p.name()),
-                        "description": "painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass and bronze via color), leather (grips, straps, belts), plastic, wood, stone (also concrete), rubber." },
+                        "description": "painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass via color), bronze (green verdigris patina in creases), leather (grips, straps, belts), fabric (woven cloth: banners, sacks, upholstery), ceramic (glazed pottery, tiles; chips show clay), bone (also ivory, horn), glass (clear and see-through; color tints it), gemstone (see-through, saturated: ruby by default), plastic, wood, stone (also concrete), rubber." },
                     "color": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3,
                         "description": "Main colour, linear RGB 0 to 1 (paint colour for painted_metal). Defaults to the preset's." },
                     "color_hex": { "type": "string", "description": "Main colour as sRGB hex, e.g. \"#5a6b2e\", instead of `color`." },
@@ -999,7 +1002,13 @@ fn set_material(scene: &mut Scene, args: &Value) -> Result<Value, String> {
     if let Some(e) = floats::<3>(args, "emissive")? {
         m.emissive = e;
     }
-    let material = scene.add_material(m);
+    if let Some(v) = args.get("transmission").and_then(Value::as_f64) {
+        m.transmission = v as f32;
+    }
+    if let Some(v) = args.get("ior").and_then(Value::as_f64) {
+        m.ior = v as f32;
+    }
+    let material = scene.add_material(m.sanitized());
     scene
         .assign_material(id, material)
         .map_err(|e| e.to_string())?;
@@ -1150,6 +1159,8 @@ fn apply_smart_material(scene: &mut Scene, args: &Value) -> Result<Value, String
         base_color: [1.0; 4],
         metallic: 1.0,
         roughness: 1.0,
+        transmission: preset.transmission(),
+        ior: preset.ior(),
         textures: Some(Arc::new(MaterialTextures {
             base_color: baked.base_color,
             metallic_roughness: baked.metallic_roughness,

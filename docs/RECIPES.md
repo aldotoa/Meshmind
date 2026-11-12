@@ -74,13 +74,12 @@ The close-up is `render_preview` with `focus` set to the hilt's object ids.
   `polished_metal`. A leather wrap at the bottom is a short helix `sweep`.
 - **Barrel:** one `lathe` with a bulging profile, in `wood`, and four
   thin lathed bands in `rusty_metal`, each sized to sit on the bulge.
-- **Potion bottle:** a lathed body (round belly, narrow neck, lip) with a
-  glossy coloured `set_material`, a lathed cork in `wood`, and a cord round
+- **Potion bottle:** a lathed body (round belly, narrow neck, lip) in
+  tinted `glass`, a lathed cork in `wood`, and a cord round
   the neck made by sweeping a closed circle (`path` whose last point equals
   the first).
 
 ## Known gaps
 
-- There is no glass or transparency yet, so glass reads as glossy plastic.
 - Fullers run the whole length of a lofted blade; a fuller that stops short
   of the point needs a `boolean` cut instead.

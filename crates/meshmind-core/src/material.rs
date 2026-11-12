@@ -17,6 +17,13 @@ pub struct Material {
     pub roughness: f32,
     /// Linear RGB emissive color.
     pub emissive: [f32; 3],
+    /// 0 = opaque, 1 = clear like glass: light passes through, tinted by the
+    /// base colour (glTF `KHR_materials_transmission`).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub transmission: f32,
+    /// Index of refraction: 1.5 for glass, 1.33 water, 1.77 ruby, 2.42 diamond.
+    #[serde(default = "default_ior")]
+    pub ior: f32,
     /// Baked textures (shared, so undo snapshots stay cheap). When present,
     /// the factors above multiply them, as in glTF.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -31,6 +38,14 @@ pub struct MaterialTextures {
     pub normal: Texture,
 }
 
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+fn default_ior() -> f32 {
+    1.5
+}
+
 impl Default for Material {
     fn default() -> Self {
         Self {
@@ -39,6 +54,8 @@ impl Default for Material {
             metallic: 0.0,
             roughness: 0.5,
             emissive: [0.0; 3],
+            transmission: 0.0,
+            ior: 1.5,
             textures: None,
         }
     }
@@ -55,6 +72,12 @@ impl Material {
         }
         self.metallic = self.metallic.clamp(0.0, 1.0);
         self.roughness = self.roughness.clamp(0.0, 1.0);
+        self.transmission = self.transmission.clamp(0.0, 1.0);
+        self.ior = if self.ior.is_finite() {
+            self.ior.clamp(1.0, 3.0)
+        } else {
+            1.5
+        };
         self
     }
 }

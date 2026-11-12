@@ -126,7 +126,13 @@ struct DepthMap {
 
 impl DepthMap {
     /// Looking along `dir`, covering a square of `half` around `origin`.
-    fn build(tris: &[Tri], origin: Vec3, dir: Vec3, half: f32, res: usize) -> DepthMap {
+    fn build<'a>(
+        tris: impl IntoIterator<Item = &'a Tri>,
+        origin: Vec3,
+        dir: Vec3,
+        half: f32,
+        res: usize,
+    ) -> DepthMap {
         let up = if dir.y.abs() > 0.95 { Vec3::Z } else { Vec3::Y };
         let u = dir.cross(up).normalize();
         let v = u.cross(dir).normalize();
@@ -317,13 +323,21 @@ pub fn render_view_focused(scene: &Scene, view: View, size: u32, focus: Option<&
             key = Vec3::new(key.x, 0.0, key.z).normalize_or(Vec3::X) * 0.94 + Vec3::Y * 0.35;
             key = key.normalize();
         }
-        let shadow_map = DepthMap::build(&tris, center, -key, radius * 1.05, 1024);
+        let glassy = |t: &Tri| t.material != FLOOR && materials[t.material].transmission > 0.0;
+        // Clear materials cast only a light shadow, so leave them out of the shadow map.
+        let shadow_map = DepthMap::build(
+            tris.iter().filter(|t| !glassy(t)),
+            center,
+            -key,
+            radius * 1.05,
+            1024,
+        );
         let shadow_bias = radius * 0.012;
         // Lowest point of the object above each spot of the floor, for the contact shadow.
         let floor_y = lo.y;
         let contact_half = radius * 1.6;
         let contact = DepthMap::build(
-            &tris,
+            tris.iter(),
             Vec3::new(center.x, floor_y, center.z),
             Vec3::Y,
             contact_half,
@@ -361,7 +375,23 @@ pub fn render_view_focused(scene: &Scene, view: View, size: u32, focus: Option<&
             .normalize();
 
         let mut depth = vec![f32::INFINITY; (n * n) as usize];
-        for tri in &tris {
+        // Opaque first, then see-through triangles from back to front, so they
+        // can show (and bend) what is behind them.
+        let mut order: Vec<usize> = (0..tris.len()).filter(|&i| !glassy(&tris[i])).collect();
+        let first_clear = order.len();
+        let mut clear: Vec<usize> = (0..tris.len()).filter(|&i| glassy(&tris[i])).collect();
+        let eye_dist = |i: &usize| {
+            ((tris[*i].world[0] + tris[*i].world[1] + tris[*i].world[2]) / 3.0 - eye).length()
+        };
+        clear.sort_by(|a, b| eye_dist(b).total_cmp(&eye_dist(a)));
+        order.extend(clear);
+        let mut behind: Vec<Vec3> = Vec::new();
+        for (k, &ti) in order.iter().enumerate() {
+            let tri = &tris[ti];
+            if k == first_clear {
+                behind = color.clone();
+            }
+            let clear_pass = k >= first_clear;
             let clip = tri.world.map(|p| vp * Vec4::new(p.x, p.y, p.z, 1.0));
             if clip.iter().any(|c| c.w <= 1e-6) {
                 continue;
@@ -411,7 +441,9 @@ pub fn render_view_focused(scene: &Scene, view: View, size: u32, focus: Option<&
                     if z >= depth[i] {
                         continue;
                     }
-                    depth[i] = z;
+                    if !clear_pass {
+                        depth[i] = z;
+                    }
                     // Perspective-correct interpolation.
                     let (a, b, c) = (w0 * inv_w[0], w1 * inv_w[1], w2 * inv_w[2]);
                     let s = a + b + c;
@@ -485,8 +517,34 @@ pub fn render_view_focused(scene: &Scene, view: View, size: u32, focus: Option<&
                         * Vec3::from(light.key_color)
                         * light.key_intensity
                         * 0.6;
-                    color[i] = shade(&surface, &light, nrm, to_eye, key, fill, lit, boxes)
+                    let mut out = shade(&surface, &light, nrm, to_eye, key, fill, lit, boxes)
                         + Vec3::from(mat.emissive);
+                    if clear_pass {
+                        // Light through the surface: what is behind, shifted by
+                        // refraction and tinted, plus reflections on top.
+                        let ior = mat.ior.max(1.0);
+                        let f0 = ((ior - 1.0) / (ior + 1.0)).powi(2);
+                        let ndv = nrm.dot(to_eye).max(0.0);
+                        let fresnel = f0 + (1.0 - f0) * (1.0 - ndv).powi(5);
+                        let cn = to_cam(nrm);
+                        let shift = (ior - 1.0) * 0.05 * n as f32;
+                        let bx = (x as f32 - cn.x * shift).clamp(0.0, n as f32 - 1.0) as u32;
+                        let by = (y as f32 + cn.y * shift).clamp(0.0, n as f32 - 1.0) as u32;
+                        let bg = behind[(by * n + bx) as usize].lerp(color[i], 0.35);
+                        // Glass also glows faintly with the light it gathers.
+                        let bg = bg + environment(&light, -to_eye) * 0.12;
+                        let gloss = Surface {
+                            base: Vec3::ZERO,
+                            metallic: 0.0,
+                            roughness: surface.roughness,
+                        };
+                        let reflect = shade(&gloss, &light, nrm, to_eye, key, fill, lit, boxes)
+                            * (fresnel / 0.04).clamp(1.0, 3.0);
+                        let through = bg * surface.base * (1.0 - fresnel);
+                        let t = mat.transmission.clamp(0.0, 1.0);
+                        out = through * t + out * (1.0 - t) + reflect * t;
+                    }
+                    color[i] = out;
                 }
             }
         }

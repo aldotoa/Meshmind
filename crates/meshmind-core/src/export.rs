@@ -37,6 +37,7 @@ pub fn to_glb(scene: &Scene) -> Vec<u8> {
     let mut materials: Vec<Value> = Vec::new();
     let mut images: Vec<Value> = Vec::new();
     let mut textures: Vec<Value> = Vec::new();
+    let mut uses_transmission = false;
     for (id, m) in scene.materials() {
         material_index.insert(id, materials.len());
         let mut pbr = json!({
@@ -49,6 +50,13 @@ pub fn to_glb(scene: &Scene) -> Vec<u8> {
             "emissiveFactor": m.emissive,
             "alphaMode": if m.base_color[3] < 1.0 { "BLEND" } else { "OPAQUE" },
         });
+        if m.transmission > 0.0 {
+            mat["extensions"] = json!({
+                "KHR_materials_transmission": { "transmissionFactor": m.transmission },
+                "KHR_materials_ior": { "ior": m.ior },
+            });
+            uses_transmission = true;
+        }
         if let Some(tex) = &m.textures {
             let mut add = |t: &crate::texture::Texture, suffix: &str| -> usize {
                 let view = push_view(&mut bin, &t.to_png(), None);
@@ -127,6 +135,9 @@ pub fn to_glb(scene: &Scene) -> Vec<u8> {
         "accessors": accessors,
         "bufferViews": views,
     });
+    if uses_transmission {
+        doc["extensionsUsed"] = json!(["KHR_materials_transmission", "KHR_materials_ior"]);
+    }
     if !images.is_empty() {
         doc["images"] = json!(images);
         doc["textures"] = json!(textures);
@@ -220,5 +231,21 @@ mod tests {
     fn empty_scene_is_still_valid() {
         let glb = to_glb(&Scene::new());
         gltf::Gltf::from_slice(&glb).expect("valid glb");
+    }
+
+    #[test]
+    fn glass_exports_transmission() {
+        let mut scene = Scene::new();
+        let id = scene.add_object("Bottle", cube(1.0)).unwrap();
+        let glass = scene.add_material(Material {
+            transmission: 1.0,
+            ior: 1.5,
+            ..Default::default()
+        });
+        scene.assign_material(id, glass).unwrap();
+        let glb = to_glb(&scene);
+        let text = String::from_utf8_lossy(&glb);
+        assert!(text.contains("KHR_materials_transmission"));
+        assert!(text.contains("\"extensionsUsed\""));
     }
 }
