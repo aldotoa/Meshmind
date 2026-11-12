@@ -67,8 +67,8 @@ impl LightingPreset {
                 key_intensity: 2.0,
                 fill_color: [0.8, 0.88, 1.0],
                 fill_intensity: 0.5,
-                background_top: [0.16, 0.17, 0.2],
-                background_bottom: [0.05, 0.05, 0.06],
+                background_top: [0.1, 0.105, 0.125],
+                background_bottom: [0.03, 0.03, 0.036],
                 exposure: 1.0,
             },
             LightingPreset::Outdoor => LightingParams {

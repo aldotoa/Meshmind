@@ -103,6 +103,42 @@ impl PolyMesh {
         Some(Aabb { min, max })
     }
 
+    /// Split a face into triangles, as corner indices into `face.verts`.
+    /// Convex faces use a fan; concave ones (outlines with notches, blade
+    /// cross-sections with a fuller) use ear clipping.
+    pub fn triangulate_face(&self, face: &Face) -> Vec<[usize; 3]> {
+        let n = face.verts.len();
+        let fan = || (1..n - 1).map(|i| [0, i, i + 1]).collect::<Vec<_>>();
+        if n <= 3 {
+            return fan();
+        }
+        let normal = self.face_normal_area(face);
+        if normal.length_squared() < 1e-20 {
+            return fan();
+        }
+        // Project onto the face plane.
+        let (u, v) = normal.normalize().any_orthonormal_pair();
+        let pts: Vec<Vec2> = face
+            .verts
+            .iter()
+            .map(|&i| {
+                let p = self.positions[i as usize];
+                Vec2::new(p.dot(u), p.dot(v))
+            })
+            .collect();
+        // Orientation of (u, v) relative to the normal decides the sign of a convex turn.
+        let sign = if u.cross(v).dot(normal) >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        let turn = |a: Vec2, b: Vec2, c: Vec2| (b - a).perp_dot(c - b) * sign;
+        if (0..n).all(|i| turn(pts[i], pts[(i + 1) % n], pts[(i + 2) % n]) >= -1e-12) {
+            return fan();
+        }
+        ear_clip(&pts, sign).unwrap_or_else(fan)
+    }
+
     /// Signed volume (positive for a closed mesh with outward faces).
     pub fn volume(&self) -> f32 {
         let mut v = 0.0;
@@ -235,35 +271,52 @@ impl PolyMesh {
     }
 
     /// Triangulate into a render mesh. Flat faces get their own vertices and
-    /// face normal; smooth faces share area-weighted normals per position.
-    /// UVs are a simple box projection until proper unwrapping lands.
+    /// face normal. Smooth faces share area-weighted normals with smooth
+    /// neighbours, except across edges sharper than [`AUTO_SMOOTH_DEGREES`],
+    /// which stay crisp (a blade's cutting edge, the rim of a lathed pommel).
     pub fn to_mesh(&self) -> Mesh {
         let normals: Vec<Vec3> = self
             .faces
             .iter()
             .map(|f| self.face_normal_area(f))
             .collect();
-        let mut smooth_normals = vec![Vec3::ZERO; self.positions.len()];
-        for (f, n) in self.faces.iter().zip(&normals) {
+        let unit: Vec<Vec3> = normals.iter().map(|n| n.normalize_or_zero()).collect();
+        let mut vertex_faces: Vec<Vec<u32>> = vec![Vec::new(); self.positions.len()];
+        for (fi, f) in self.faces.iter().enumerate() {
             if f.smooth {
                 for &v in &f.verts {
-                    smooth_normals[v as usize] += *n;
+                    vertex_faces[v as usize].push(fi as u32);
                 }
             }
         }
+        let cos_limit = AUTO_SMOOTH_DEGREES.to_radians().cos();
+        let smooth_normal = |v: u32, fi: usize| -> Vec3 {
+            let mut sum = Vec3::ZERO;
+            for &g in &vertex_faces[v as usize] {
+                if unit[g as usize].dot(unit[fi]) >= cos_limit {
+                    sum += normals[g as usize];
+                }
+            }
+            sum.normalize_or(unit[fi])
+        };
         let mut mesh = Mesh::default();
-        // Smooth corners share a vertex when position and UV match.
-        let mut shared: HashMap<(u32, u32, u32), u32> = HashMap::new();
-        for (f, n) in self.faces.iter().zip(&normals) {
-            let face_n = n.normalize_or_zero();
+        // Smooth corners share a vertex when position, normal and UV match.
+        let mut shared: HashMap<(u32, [u32; 2], [i32; 3]), u32> = HashMap::new();
+        for (fi, f) in self.faces.iter().enumerate() {
+            let face_n = unit[fi];
             let has_uv = f.uvs.len() == f.verts.len();
             let mut idx = Vec::with_capacity(f.verts.len());
             for (k, &v) in f.verts.iter().enumerate() {
                 let p = self.positions[v as usize];
+                let vn = if f.smooth {
+                    smooth_normal(v, fi)
+                } else {
+                    face_n
+                };
                 let uv = match (has_uv, f.smooth) {
                     (true, _) => f.uvs[k],
                     // Project by the shared vertex normal so smooth neighbours agree.
-                    (false, true) => box_uv(p, smooth_normals[v as usize]),
+                    (false, true) => box_uv(p, vn),
                     (false, false) => box_uv(p, face_n),
                 };
                 let make = |mesh: &mut Mesh, normal: Vec3| {
@@ -273,23 +326,66 @@ impl PolyMesh {
                     (mesh.positions.len() - 1) as u32
                 };
                 let i = if f.smooth {
+                    let q = (vn * 4096.0).round().as_ivec3().to_array();
                     *shared
-                        .entry((v, uv.x.to_bits(), uv.y.to_bits()))
-                        .or_insert_with(|| {
-                            make(&mut mesh, smooth_normals[v as usize].normalize_or_zero())
-                        })
+                        .entry((v, [uv.x.to_bits(), uv.y.to_bits()], q))
+                        .or_insert_with(|| make(&mut mesh, vn))
                 } else {
                     make(&mut mesh, face_n)
                 };
                 idx.push(i);
             }
-            for i in 1..idx.len() - 1 {
+            for t in self.triangulate_face(f) {
                 mesh.indices
-                    .extend_from_slice(&[idx[0], idx[i], idx[i + 1]]);
+                    .extend_from_slice(&[idx[t[0]], idx[t[1]], idx[t[2]]]);
             }
         }
         mesh
     }
+}
+
+/// Smooth faces meeting at a sharper angle than this keep a hard edge.
+pub const AUTO_SMOOTH_DEGREES: f32 = 50.0;
+
+/// Ear clipping for a simple polygon in 2D. `sign` makes convex turns positive.
+fn ear_clip(pts: &[Vec2], sign: f32) -> Option<Vec<[usize; 3]>> {
+    let mut idx: Vec<usize> = (0..pts.len()).collect();
+    let mut out = Vec::with_capacity(pts.len() - 2);
+    let cross = |a: Vec2, b: Vec2, c: Vec2| (b - a).perp_dot(c - a) * sign;
+    let mut guard = 0;
+    while idx.len() > 3 {
+        guard += 1;
+        if guard > pts.len() * pts.len() {
+            return None;
+        }
+        let n = idx.len();
+        let mut clipped = false;
+        for i in 0..n {
+            let (a, b, c) = (idx[(i + n - 1) % n], idx[i], idx[(i + 1) % n]);
+            if cross(pts[a], pts[b], pts[c]) <= 1e-12 {
+                continue; // reflex or degenerate corner
+            }
+            let inside = idx.iter().any(|&k| {
+                k != a
+                    && k != b
+                    && k != c
+                    && cross(pts[a], pts[b], pts[k]) >= 0.0
+                    && cross(pts[b], pts[c], pts[k]) >= 0.0
+                    && cross(pts[c], pts[a], pts[k]) >= 0.0
+            });
+            if !inside {
+                out.push([a, b, c]);
+                idx.remove(i);
+                clipped = true;
+                break;
+            }
+        }
+        if !clipped {
+            return None;
+        }
+    }
+    out.push([idx[0], idx[1], idx[2]]);
+    Some(out)
 }
 
 fn box_uv(p: Vec3, n: Vec3) -> Vec2 {
@@ -331,6 +427,42 @@ mod tests {
     fn mirror_transform_keeps_outward_winding() {
         let c = cube(1.0).transformed(&Affine3A::from_scale(Vec3::new(-1.0, 1.0, 1.0)));
         assert!(c.volume() > 0.0);
+    }
+
+    #[test]
+    fn concave_faces_triangulate_inside_their_outline() {
+        // An L-shaped face: a fan from corner 0 would cover the notch.
+        let mut m = PolyMesh::default();
+        for (x, y) in [(0., 0.), (2., 0.), (2., 1.), (1., 1.), (1., 2.), (0., 2.)] {
+            m.add_vertex(Vec3::new(x, y, 0.0));
+        }
+        m.add_face((0..6).collect(), false);
+        let tris = m.triangulate_face(&m.faces[0]);
+        assert_eq!(tris.len(), 4);
+        let area: f32 = tris
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|i| m.positions[i]);
+                (b - a).cross(c - a).z * 0.5
+            })
+            .sum();
+        assert!((area - 3.0).abs() < 1e-5, "area {area}");
+        assert!(tris.iter().all(|t| {
+            let [a, b, c] = t.map(|i| m.positions[i]);
+            (b - a).cross(c - a).z > 0.0
+        }));
+    }
+
+    #[test]
+    fn auto_smooth_keeps_sharp_edges_on_smooth_faces() {
+        let mut c = cube(1.0);
+        for f in &mut c.faces {
+            f.smooth = true;
+        }
+        // 90 degree edges stay hard: every corner keeps its face normal.
+        assert_eq!(c.to_mesh().vertex_count(), 24);
+        let s = uv_sphere(1.0, 16, 8);
+        assert_eq!(s.to_mesh().vertex_count(), s.positions.len());
     }
 
     #[test]

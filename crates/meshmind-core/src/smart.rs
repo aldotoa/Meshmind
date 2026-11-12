@@ -30,10 +30,17 @@ pub enum Preset {
     Stone,
     /// Dark matte rubber.
     Rubber,
+    /// Polished steel: mirror-like, brushed along the object's Y axis, with
+    /// fine scratches. Blades, armour, tools, chrome.
+    PolishedMetal,
+    /// Gold or brass: polished, warm, tarnished in the creases.
+    Gold,
+    /// Leather: pebbled grain, darker in creases, lighter and shinier where worn.
+    Leather,
 }
 
 impl Preset {
-    pub const ALL: [Preset; 7] = [
+    pub const ALL: [Preset; 10] = [
         Preset::PaintedMetal,
         Preset::BareMetal,
         Preset::RustyMetal,
@@ -41,6 +48,9 @@ impl Preset {
         Preset::Wood,
         Preset::Stone,
         Preset::Rubber,
+        Preset::PolishedMetal,
+        Preset::Gold,
+        Preset::Leather,
     ];
 
     pub fn name(self) -> &'static str {
@@ -52,6 +62,9 @@ impl Preset {
             Preset::Wood => "wood",
             Preset::Stone => "stone",
             Preset::Rubber => "rubber",
+            Preset::PolishedMetal => "polished_metal",
+            Preset::Gold => "gold",
+            Preset::Leather => "leather",
         }
     }
 
@@ -68,6 +81,9 @@ impl Preset {
             Preset::Wood => Vec3::new(0.32, 0.17, 0.07),
             Preset::Stone => Vec3::new(0.2, 0.19, 0.17),
             Preset::Rubber => Vec3::new(0.025, 0.025, 0.025),
+            Preset::PolishedMetal => Vec3::new(0.78, 0.79, 0.8),
+            Preset::Gold => Vec3::new(1.0, 0.71, 0.29),
+            Preset::Leather => Vec3::new(0.12, 0.055, 0.025),
         }
     }
 }
@@ -159,8 +175,10 @@ pub fn bake(mesh: &PolyMesh, mat: &SmartMaterial, size: u32) -> Result<Baked, St
             .verts
             .iter()
             .map(|&v| {
-                if f.smooth {
-                    vn[v as usize].normalize_or(face_n)
+                let s = vn[v as usize].normalize_or(face_n);
+                let cos_limit = crate::poly::AUTO_SMOOTH_DEGREES.to_radians().cos();
+                if f.smooth && s.dot(face_n) >= cos_limit {
+                    s
                 } else {
                     face_n
                 }
@@ -176,8 +194,7 @@ pub fn bake(mesh: &PolyMesh, mat: &SmartMaterial, size: u32) -> Result<Baked, St
             .iter()
             .filter(|e| e.a.min(e.b).cmple(hi).all() && e.a.max(e.b).cmpge(lo).all())
             .collect();
-        for i in 1..f.verts.len() - 1 {
-            let tri = [0, i, i + 1];
+        for tri in mesh.triangulate_face(f) {
             let uv = tri.map(|k| f.uvs[k] * size as f32);
             raster(uv, n, |x, y, w| {
                 let p = pts[tri[0]] * w[0] + pts[tri[1]] * w[1] + pts[tri[2]] * w[2];
@@ -404,6 +421,54 @@ fn shade(
             roughness: 0.85 + 0.1 * fine,
             height: 0.5 + fine * 0.08,
         },
+        Preset::PolishedMetal | Preset::Gold => {
+            // Brushing: long, thin streaks along Y, in absolute millimetres so
+            // they read the same on any object size.
+            let brush = fbm(Vec3::new(p.x * 900.0, p.y * 6.0, p.z * 900.0) + seed, 3);
+            let streak = (brush - 0.5) * 2.0;
+            // Sparse random scratches crossing the brushing.
+            let sc = fbm(
+                Vec3::new(q.x * 3.0 + q.y * 40.0, q.y * 3.0 - q.x * 40.0, q.z * 40.0),
+                2,
+            );
+            let scratch = smoothstep(0.012, 0.0, (sc - 0.5).abs()) * smoothstep(0.55, 0.75, big);
+            let base_rough = if m.preset == Preset::Gold { 0.16 } else { 0.1 };
+            let mut s = Surface {
+                color: color * (0.97 + 0.05 * mid),
+                metallic: 1.0,
+                roughness: base_rough + 0.06 * streak.abs() + 0.05 * big,
+                height: 0.5 + streak * 0.015,
+            };
+            s.roughness = (s.roughness + scratch * (0.15 + 0.3 * m.wear)).min(1.0);
+            s.height -= scratch * 0.08;
+            if m.preset == Preset::Gold {
+                // Tarnish darkens and dulls the creases.
+                let tarnish = (cavity * (0.6 + 0.4 * mid)).clamp(0.0, 1.0);
+                s.color = s.color.lerp(color * Vec3::new(0.35, 0.3, 0.22), tarnish);
+                s.roughness = s.roughness * (1.0 - tarnish) + 0.5 * tarnish;
+            }
+            // Polished edges catch more light.
+            s.roughness *= 1.0 - wear * 0.4;
+            s
+        }
+        Preset::Leather => {
+            // Pebble grain: cellular-looking bumps from sharpened noise.
+            let grain = fbm(p * 900.0 + seed, 3);
+            let pebble = smoothstep(0.35, 0.7, grain);
+            let mut s = Surface {
+                color: color * (0.8 + 0.35 * big) * (0.9 + 0.15 * pebble),
+                metallic: 0.0,
+                roughness: 0.62 + 0.12 * pebble,
+                height: 0.45 + 0.15 * pebble,
+            };
+            // Creases: darker; worn high points: lighter and smoother (oiled).
+            s.color *= 1.0 - cavity * 0.5;
+            s.color = s
+                .color
+                .lerp(color * 1.6 + Vec3::new(0.015, 0.01, 0.005), wear * 0.5);
+            s.roughness = s.roughness * (1.0 - wear) + 0.42 * wear;
+            s
+        }
     };
     // Dirt on top of everything.
     s.color = s.color.lerp(grime, dirt * 0.85);

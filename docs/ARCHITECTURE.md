@@ -70,8 +70,8 @@ watches, reviews, and steers.
 
 The tools that exist today are listed in [TOOLS.md](TOOLS.md), which is
 generated from the definitions agents see. Planned additions: `group`,
-`create_from_profile` (lathe or extrude a 2D outline), `deform`, `scene_stats`
-(poly count, UV coverage, problems), and FBX/OBJ export.
+`scene_stats` (poly count, UV coverage, problems), glass and transparency,
+and FBX/OBJ export.
 
 Project files (`.meshmind`) are JSON holding the editable scene, with baked
 textures as base64 PNG. The desktop app autosaves to its data folder shortly
@@ -106,6 +106,18 @@ after every change and restores the last session at startup.
    before applying materials.
 4. **Lighting presets** are defined once in core and used by both the
    preview renderer and the desktop viewer.
+5. **Shape tools** (`shapes.rs`, `deform.rs`) build parts the way artists
+   do: lofting a cross-section through stations, lathing a profile,
+   extruding an outline, sweeping a tube along a path (parallel-transport
+   frames, so helices don't twist). `deform` slices the mesh into edge loops
+   first so bends and twists stay smooth.
+6. **Auto-smooth.** Smooth faces only share a normal across edges under 50°,
+   so a lofted blade has smooth faces and crisp cutting edges without the
+   agent having to manage shading. Concave n-gons are ear-clipped.
+7. **The preview renderer** lights scenes like a product photo: soft boxes
+   and a bright horizon band in the reflections (what makes polished metal
+   read as metal), a shadow-mapped key light, and an invisible floor that
+   catches the shadow plus a contact shadow.
 
 ## Known limitations
 
@@ -114,7 +126,7 @@ after every change and restores the last session at startup.
   curved parts get more seams than a hand unwrap would.
 - Any geometry edit clears UVs; the agent must re-apply smart materials
   once the shape is final (the tool result says so).
-- The software preview has no shadows; the desktop viewer does.
+- No glass or transparency yet.
 - Image-to-3D plugins are not built yet.
 
 ## Roadmap

@@ -6,6 +6,27 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Shape tools that build parts the way artists do: `loft` (blades, handles,
+  horns), `lathe` (round parts), `extrude_outline` (flat silhouettes) and
+  `sweep` (tubes, rope, rings, helical grip wraps).
+- `deform` (bend, twist, taper), `slice` (edge loops) and `move_vertices`
+  (soft-falloff reshaping in a box).
+- Smart materials `polished_metal` (brushed, scratched, mirror-like), `gold`
+  (also brass and bronze, tarnished in creases) and `leather`.
+- `render_preview` takes `focus` (object ids) for close-ups.
+- Worked recipes in docs/RECIPES.md and scripts/recipes.py: longsword, axe,
+  barrel, potion bottle.
+
+### Changed
+- Preview renderer: studio soft boxes and a horizon band in reflections,
+  shadow-mapped key light, floor shadow and contact shadow. The studio
+  background is darker.
+- Smooth shading keeps edges sharper than 50° crisp (auto-smooth), and
+  concave polygons triangulate correctly.
+- The agent guide and the `model_asset` prompt now steer agents to pick a
+  shape tool by silhouette instead of building everything from primitives.
+
 ### Fixed
 - Viewer: the floor's shadow and grid no longer draw across objects that
   reach below y = 0; the floor now moves down to the lowest object.

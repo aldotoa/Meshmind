@@ -43,17 +43,19 @@ learning a complex 3D tool, and without paying for another AI service.
    > Using MeshMind, build a sci-fi supply crate with bevelled edges, recessed
    > side panels and worn olive paint, then export it to crate.glb.
 
-More prompts that work well are in [docs/EXAMPLES.md](docs/EXAMPLES.md).
+More prompts that work well are in [docs/EXAMPLES.md](docs/EXAMPLES.md), and
+[docs/RECIPES.md](docs/RECIPES.md) walks through how a longsword, an axe, a
+barrel and a potion bottle are built, tool call by tool call.
 
 ## What agents can do
 
 | | Tools |
 |---|---|
-| Create | `create_primitive` (cube, plane, sphere, cylinder, cone, torus) |
-| Shape | `extrude`, `inset`, `bevel`, `subdivide`, `boolean` (union, difference, intersection), `mirror`, `array`, `set_shading` |
+| Create | `loft` (blades, handles, horns), `lathe` (round parts), `extrude_outline` (flat silhouettes), `sweep` (tubes, rope, grip wraps), `create_primitive` |
+| Shape | `deform` (bend, twist, taper), `move_vertices`, `slice`, `extrude`, `inset`, `bevel`, `subdivide`, `boolean` (union, difference, intersection), `mirror`, `array`, `set_shading` |
 | Scene | `list_objects`, `get_object`, `set_transform`, `duplicate_object`, `delete_object`, `clear_scene`, `undo`, `redo` |
-| Look | `apply_smart_material` (painted, bare and rusty metal, plastic, wood, stone, rubber), `set_material`, `unwrap_uvs`, `set_lighting` |
-| Review | `render_preview` returns images the agent looks at to check its own work |
+| Look | `apply_smart_material` (painted, bare, rusty and polished metal, gold, leather, plastic, wood, stone, rubber), `set_material`, `unwrap_uvs`, `set_lighting` |
+| Review | `render_preview` returns studio-lit images (with close-ups via `focus`) the agent looks at to check its own work |
 | Files | `export_glb` (glTF 2.0 with textures), `save_project` and `open_project` (`.meshmind`) |
 
 Smart materials are baked from the shape: paint chips off convex edges, grime
@@ -98,7 +100,7 @@ cargo install --path crates/meshmind-mcp         # headless server
 | `crates/meshmind-mcp` | MCP server exposing the engine as agent tools (stdio and HTTP) |
 | `crates/meshmind-render` | CPU preview renderer used by `render_preview` |
 | `apps/desktop` | Tauri desktop app: live viewer, autosave |
-| `docs/` | [Agents](docs/AGENTS.md), [examples](docs/EXAMPLES.md), [tools](docs/TOOLS.md), [architecture](docs/ARCHITECTURE.md), [releasing](docs/RELEASING.md) |
+| `docs/` | [Agents](docs/AGENTS.md), [examples](docs/EXAMPLES.md), [recipes](docs/RECIPES.md), [tools](docs/TOOLS.md), [architecture](docs/ARCHITECTURE.md), [releasing](docs/RELEASING.md) |
 
 ## Contributing
 

@@ -3,6 +3,11 @@
 //! The agent calls `render_preview` to look at its own work. This renderer runs
 //! on the CPU, so it works on every machine and in CI with no GPU, and the same
 //! scene always gives the same image.
+//!
+//! Studio-style shading: image-based reflections from a few soft boxes (what
+//! makes metal read as metal), a shadow-mapped key light, and an invisible
+//! floor that catches the shadow and a contact shadow so objects sit on the
+//! ground.
 
 use glam::{Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
 use meshmind_core::texture::srgb_to_linear;
@@ -104,8 +109,121 @@ struct Tri {
     material: usize,
 }
 
+/// Material index for the shadow-catching floor.
+const FLOOR: usize = usize::MAX;
+
+/// An orthographic depth map: the nearest depth seen along `dir` per texel.
+struct DepthMap {
+    res: usize,
+    origin: Vec3,
+    u: Vec3,
+    v: Vec3,
+    dir: Vec3,
+    /// World units per texel.
+    texel: f32,
+    depth: Vec<f32>,
+}
+
+impl DepthMap {
+    /// Looking along `dir`, covering a square of `half` around `origin`.
+    fn build(tris: &[Tri], origin: Vec3, dir: Vec3, half: f32, res: usize) -> DepthMap {
+        let up = if dir.y.abs() > 0.95 { Vec3::Z } else { Vec3::Y };
+        let u = dir.cross(up).normalize();
+        let v = u.cross(dir).normalize();
+        let texel = 2.0 * half / res as f32;
+        let mut map = DepthMap {
+            res,
+            origin,
+            u,
+            v,
+            dir,
+            texel,
+            depth: vec![f32::INFINITY; res * res],
+        };
+        for t in tris {
+            let q = t.world.map(|p| map.project(p));
+            let area =
+                (q[1].x - q[0].x) * (q[2].y - q[0].y) - (q[2].x - q[0].x) * (q[1].y - q[0].y);
+            if area.abs() < 1e-12 {
+                continue;
+            }
+            let lo = q[0].min(q[1]).min(q[2]);
+            let hi = q[0].max(q[1]).max(q[2]);
+            let (x0, x1) = (
+                lo.x.floor().max(0.0) as usize,
+                (hi.x.ceil() as i64).clamp(0, res as i64 - 1) as usize,
+            );
+            let (y0, y1) = (
+                lo.y.floor().max(0.0) as usize,
+                (hi.y.ceil() as i64).clamp(0, res as i64 - 1) as usize,
+            );
+            if lo.x >= res as f32 || lo.y >= res as f32 || hi.x < 0.0 || hi.y < 0.0 {
+                continue;
+            }
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                    let w0 = ((q[1].x - px) * (q[2].y - py) - (q[2].x - px) * (q[1].y - py)) / area;
+                    let w1 = ((q[2].x - px) * (q[0].y - py) - (q[0].x - px) * (q[2].y - py)) / area;
+                    let w2 = 1.0 - w0 - w1;
+                    if w0 < -1e-3 || w1 < -1e-3 || w2 < -1e-3 {
+                        continue;
+                    }
+                    let d = w0 * q[0].z + w1 * q[1].z + w2 * q[2].z;
+                    let i = y * res + x;
+                    if d < map.depth[i] {
+                        map.depth[i] = d;
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    /// Texel x, texel y, depth along `dir`.
+    fn project(&self, p: Vec3) -> Vec3 {
+        let r = p - self.origin;
+        let h = self.res as f32 / 2.0;
+        Vec3::new(
+            r.dot(self.u) / self.texel + h,
+            r.dot(self.v) / self.texel + h,
+            r.dot(self.dir),
+        )
+    }
+
+    fn at(&self, x: i64, y: i64) -> f32 {
+        if x < 0 || y < 0 || x >= self.res as i64 || y >= self.res as i64 {
+            return f32::INFINITY;
+        }
+        self.depth[y as usize * self.res + x as usize]
+    }
+
+    /// 0 = fully lit, 1 = fully shadowed, with a soft percentage-closer edge.
+    fn shadow(&self, p: Vec3, bias: f32, soft: i64) -> f32 {
+        let q = self.project(p);
+        let (cx, cy) = (q.x.floor() as i64, q.y.floor() as i64);
+        let mut hit = 0;
+        let mut count = 0;
+        for dy in -soft..=soft {
+            for dx in -soft..=soft {
+                count += 1;
+                if self.at(cx + dx, cy + dy) < q.z - bias {
+                    hit += 1;
+                }
+            }
+        }
+        hit as f32 / count as f32
+    }
+}
+
 /// Render one view of the scene at `size` × `size` pixels.
 pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
+    render_view_focused(scene, view, size, None)
+}
+
+/// Like [`render_view`], but frames the camera on the objects in `focus` (a
+/// close-up) while still drawing the whole scene.
+pub fn render_view_focused(scene: &Scene, view: View, size: u32, focus: Option<&[u32]>) -> Image {
     const SS: u32 = 2; // supersampling factor for anti-aliasing
     let n = size * SS;
 
@@ -114,7 +232,9 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
 
     let mut tris = Vec::new();
     let (mut lo, mut hi) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+    let (mut flo, mut fhi) = (lo, hi);
     for obj in scene.objects() {
+        let focused = focus.is_some_and(|f| f.contains(&obj.id));
         let m = obj.transform.matrix();
         let nm = m.matrix3.inverse().transpose();
         let mesh = obj.mesh.to_mesh();
@@ -129,6 +249,10 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
             for p in world {
                 lo = lo.min(p);
                 hi = hi.max(p);
+                if focused {
+                    flo = flo.min(p);
+                    fhi = fhi.max(p);
+                }
             }
             let uv = idx.map(|i| mesh.uvs[i]);
             let (e1, e2) = (world[1] - world[0], world[2] - world[0]);
@@ -164,24 +288,74 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
     if !tris.is_empty() {
         let center = (lo + hi) / 2.0;
         let radius = ((hi - lo).length() / 2.0).max(1e-3);
+        // The camera frames the focused objects, or everything.
+        let (cam_center, cam_radius) = if flo.x.is_finite() {
+            ((flo + fhi) / 2.0, ((fhi - flo).length() / 2.0).max(1e-3))
+        } else {
+            (center, radius)
+        };
         let fov = 35f32.to_radians();
-        let dist = radius / (fov / 2.0).sin() * 1.05;
+        let dist = cam_radius / (fov / 2.0).sin() * 1.05;
         let (dir, up) = view.eye_dir_up();
-        let eye = center + dir * dist;
-        let view_m = Mat4::look_at_rh(eye, center, up);
+        let eye = cam_center + dir * dist;
+        let view_m = Mat4::look_at_rh(eye, cam_center, up);
         let proj = Mat4::perspective_rh(
             fov,
             1.0,
-            (dist - radius * 1.5).max(dist * 0.01),
-            dist + radius * 1.5,
+            (dist - cam_radius * 1.5).max(dist * 0.01),
+            dist + radius * 8.0,
         );
         let vp = proj * view_m;
 
         // Lights follow the camera so every view is readable.
         let cam_to_world = view_m.inverse();
-        let key = cam_to_world
+        let mut key = cam_to_world
             .transform_vector3(Vec3::from(light.key_direction))
             .normalize();
+        // Keep the key above the horizon so shadows fall on the floor.
+        if key.y < 0.35 {
+            key = Vec3::new(key.x, 0.0, key.z).normalize_or(Vec3::X) * 0.94 + Vec3::Y * 0.35;
+            key = key.normalize();
+        }
+        let shadow_map = DepthMap::build(&tris, center, -key, radius * 1.05, 1024);
+        let shadow_bias = radius * 0.012;
+        // Lowest point of the object above each spot of the floor, for the contact shadow.
+        let floor_y = lo.y;
+        let contact_half = radius * 1.6;
+        let contact = DepthMap::build(
+            &tris,
+            Vec3::new(center.x, floor_y, center.z),
+            Vec3::Y,
+            contact_half,
+            192,
+        );
+        // The floor: a grid, so the part behind the camera can be skipped.
+        let floor_half = radius * 6.0;
+        let cells = 24;
+        let cell = 2.0 * floor_half / cells as f32;
+        for gz in 0..cells {
+            for gx in 0..cells {
+                let x0 = center.x - floor_half + gx as f32 * cell;
+                let z0 = center.z - floor_half + gz as f32 * cell;
+                let c = [
+                    Vec3::new(x0, floor_y, z0),
+                    Vec3::new(x0, floor_y, z0 + cell),
+                    Vec3::new(x0 + cell, floor_y, z0 + cell),
+                    Vec3::new(x0 + cell, floor_y, z0),
+                ];
+                for world in [[c[0], c[1], c[2]], [c[0], c[2], c[3]]] {
+                    tris.push(Tri {
+                        world,
+                        normal: [Vec3::Y; 3],
+                        uv: [Vec2::ZERO; 3],
+                        tangent: Vec3::ZERO,
+                        bitangent: Vec3::ZERO,
+                        material: FLOOR,
+                    });
+                }
+            }
+        }
+        let to_cam = |d: Vec3| view_m.transform_vector3(d);
         let fill = cam_to_world
             .transform_vector3(Vec3::new(0.7, 0.1, 0.4))
             .normalize();
@@ -216,7 +390,12 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
             let max_y = (sy.iter().cloned().fold(f32::NEG_INFINITY, f32::max).ceil() as i64)
                 .clamp(0, n as i64 - 1) as u32;
             let inv_w = clip.map(|c| 1.0 / c.w);
-            let mat = &materials[tri.material];
+            let is_floor = tri.material == FLOOR;
+            let mat = if is_floor {
+                &materials[0]
+            } else {
+                &materials[tri.material]
+            };
             for y in min_y..=max_y {
                 for x in min_x..=max_x {
                     let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
@@ -239,6 +418,33 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
                     let pos = (tri.world[0] * a + tri.world[1] * b + tri.world[2] * c) / s;
                     let mut nrm = ((tri.normal[0] * a + tri.normal[1] * b + tri.normal[2] * c) / s)
                         .normalize_or_zero();
+                    if is_floor {
+                        // Invisible floor: the background, darkened by shadows.
+                        let from_center = Vec2::new(pos.x - center.x, pos.z - center.z).length();
+                        let fade = 1.0 - smooth(radius * 1.2, radius * 4.5, from_center);
+                        let shadow = shadow_map.shadow(pos, shadow_bias, 2);
+                        let mut near = 0.0f32;
+                        let q = contact.project(pos);
+                        let k = 4;
+                        let mut wsum = 0.0;
+                        for dy in -k..=k {
+                            for dx in -k..=k {
+                                let w = 1.0 / (1.0 + (dx * dx + dy * dy) as f32);
+                                wsum += w;
+                                let h = contact.at(q.x as i64 + dx, q.y as i64 + dy);
+                                if h.is_finite() {
+                                    near += w * (-(h - floor_y).max(0.0) / (radius * 0.06)).exp();
+                                }
+                            }
+                        }
+                        let near = near / wsum;
+                        let bg = color[i];
+                        let dark = (shadow * 0.55 * (light.key_intensity / 2.0).min(1.0)
+                            + near * 0.7)
+                            .min(0.85);
+                        color[i] = bg * (1.0 - dark * fade);
+                        continue;
+                    }
                     let uv = (tri.uv[0] * a + tri.uv[1] * b + tri.uv[2] * c) / s;
                     let to_eye = (eye - pos).normalize();
                     if nrm.dot(to_eye) < 0.0 {
@@ -273,8 +479,14 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
                             nrm = (t * tn.x + bt * tn.y + nrm * tn.z).normalize_or(nrm);
                         }
                     }
-                    color[i] =
-                        shade(&surface, &light, nrm, to_eye, key, fill) + Vec3::from(mat.emissive);
+                    let lit = 1.0 - shadow_map.shadow(pos, shadow_bias, 1);
+                    let r = (2.0 * nrm.dot(to_eye) * nrm - to_eye).normalize_or(nrm);
+                    let boxes = softboxes(to_cam(r), surface.roughness)
+                        * Vec3::from(light.key_color)
+                        * light.key_intensity
+                        * 0.6;
+                    color[i] = shade(&surface, &light, nrm, to_eye, key, fill, lit, boxes)
+                        + Vec3::from(mat.emissive);
                 }
             }
         }
@@ -320,10 +532,59 @@ fn environment(light: &LightingParams, d: Vec3) -> Vec3 {
     } else {
         horizon.lerp(ground, (-t).powf(0.4))
     };
-    c * light.ambient_intensity * 2.2
+    // A bright band around the horizon, like the curved wall of a photo
+    // studio: long flat surfaces (blades, panels) reflect it as a gradient.
+    let glow = (-(t / 0.25) * (t / 0.25)).exp() * 1.3;
+    (c + Vec3::splat(glow) * horizon) * light.ambient_intensity * 2.2
 }
 
-fn shade(m: &Surface, light: &LightingParams, n: Vec3, v: Vec3, key: Vec3, fill: Vec3) -> Vec3 {
+fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// Studio soft boxes seen in camera-space direction `d` (x right, y up, z
+/// towards the viewer), blurred by roughness. A large key box up and to the
+/// left, a tall strip on the right and a strip overhead, so every view of a
+/// metal surface shows crisp, readable highlights like a product photo.
+fn softboxes(d: Vec3, rough: f32) -> Vec3 {
+    let blur = 0.04 + rough * rough * 0.9;
+    let damp = 1.0 / (1.0 + rough * rough * 6.0);
+    let panel = |center: Vec3, half_w: f32, half_h: f32, strength: f32| {
+        let c = center.normalize();
+        let cos = d.dot(c);
+        if cos <= 0.0 {
+            return 0.0;
+        }
+        // Gnomonic projection onto the panel's plane.
+        let right = Vec3::Y.cross(c).normalize_or(Vec3::X);
+        let up = c.cross(right);
+        let p = d / cos;
+        let (x, y) = (p.dot(right).abs(), p.dot(up).abs());
+        let mx = 1.0 - smooth(half_w - blur, half_w + blur, x);
+        let my = 1.0 - smooth(half_h - blur, half_h + blur, y);
+        mx * my * strength
+    };
+    let k = panel(Vec3::new(-0.6, 0.55, 0.6), 0.32, 0.22, 1.0)
+        + panel(Vec3::new(0.85, 0.05, 0.25), 0.07, 0.6, 0.8)
+        + panel(Vec3::new(0.0, 1.0, -0.15), 0.6, 0.06, 0.6)
+        // A wide, low-hanging panel behind the camera: flat faces turned
+        // towards the viewer show its edge as a light/dark split.
+        + panel(Vec3::new(0.0, 0.42, 1.0), 1.4, 0.16, 0.3);
+    Vec3::splat(k * damp)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shade(
+    m: &Surface,
+    light: &LightingParams,
+    n: Vec3,
+    v: Vec3,
+    key: Vec3,
+    fill: Vec3,
+    key_lit: f32,
+    boxes: Vec3,
+) -> Vec3 {
     let base = m.base;
     let metallic = m.metallic.clamp(0.0, 1.0);
     let rough = m.roughness.clamp(0.04, 1.0);
@@ -339,13 +600,19 @@ fn shade(m: &Surface, light: &LightingParams, n: Vec3, v: Vec3, key: Vec3, fill:
     let n_dot_v = n.dot(v).max(0.0);
     // Reflection of the environment, blurred towards the ambient average by roughness.
     let r = (2.0 * n.dot(v) * n - v).normalize_or(n);
-    let env = environment(light, r).lerp(ambient * 1.6, rough * rough);
+    // Studio reflections are mostly dark with bright boxes, which is what
+    // gives polished metal its contrast; rough surfaces average it out.
+    let env = (environment(light, r) * (0.3 + 0.7 * rough)).lerp(ambient * 1.6, rough * rough);
     let fresnel_env = f0 + (Vec3::ONE - f0) * (1.0 - n_dot_v).powi(5) * (1.0 - rough);
-    out += fresnel_env * env;
+    out += fresnel_env * (env + boxes);
 
     let shininess = (2.0 / (rough * rough * rough * rough) - 2.0).clamp(1.0, 2048.0);
     for (l, color, intensity) in [
-        (key, Vec3::from(light.key_color), light.key_intensity),
+        (
+            key,
+            Vec3::from(light.key_color),
+            light.key_intensity * key_lit,
+        ),
         (fill, Vec3::from(light.fill_color), light.fill_intensity),
     ] {
         let n_dot_l = n.dot(l).max(0.0);
@@ -380,6 +647,16 @@ fn to_srgb8(c: f32) -> u8 {
 
 /// Render several views side by side in a grid (2 columns).
 pub fn render_sheet(scene: &Scene, views: &[View], size: u32) -> Image {
+    render_sheet_focused(scene, views, size, None)
+}
+
+/// Like [`render_sheet`], framed on the objects in `focus`.
+pub fn render_sheet_focused(
+    scene: &Scene,
+    views: &[View],
+    size: u32,
+    focus: Option<&[u32]>,
+) -> Image {
     let cols = views.len().clamp(1, 2) as u32;
     let rows = (views.len() as u32).div_ceil(cols).max(1);
     let gap = 4;
@@ -388,7 +665,7 @@ pub fn render_sheet(scene: &Scene, views: &[View], size: u32) -> Image {
         rows * size + (rows - 1) * gap,
     );
     for (i, &v) in views.iter().enumerate() {
-        let img = render_view(scene, v, size);
+        let img = render_view_focused(scene, v, size, focus);
         let (c, r) = (i as u32 % cols, i as u32 / cols);
         sheet.blit(&img, c * (size + gap), r * (size + gap));
     }

@@ -19,6 +19,85 @@ Add a new object from a basic shape, centred on the origin (Y is up, units are m
 | `size` | number | Cube/plane edge length. Default 1. |
 | `tube_radius` | number | Torus tube radius. Default 0.15. |
 
+## `loft`
+
+Create an object by sweeping one cross-section shape up the Y axis through stations, each scaling and shifting it. The way to model blades, swords, knives, horns, tapered handles, table legs and spires. Example sword blade: a lens or diamond `shape` about 1 wide and 0.2 thick, stations [{y:0, scale:[0.025,0.03]}, {y:0.65, scale:[0.022,0.025]}, {y:0.78, scale:[0.012,0.02]}, {y:0.82, scale:[0,0]}] for a blade 5 cm wide tapering to a point. A concave shape (a groove in each face) makes a fuller. Edges sharper than 50 degrees render crisp, so a pointed shape gives a sharp cutting edge.
+
+| Argument | Type | Description |
+|---|---|---|
+| `name` | string |  |
+| `shape` (required) | array of array | Closed outline as [x, z] points (3 or more), centred on 0. Scaled by each station. |
+| `stations` (required) | array of object | 2 or more cross-sections from bottom to top. |
+
+## `lathe`
+
+Create a round object by spinning a side profile around the Y axis, like a potter's wheel. The way to model pommels, knobs, bottles, vases, goblets, wheels, columns and finials. Profile points are [radius, y] from bottom to top; radius 0 closes the shape on the axis. Sharp corners in the profile stay crisp.
+
+| Argument | Type | Description |
+|---|---|---|
+| `name` | string |  |
+| `profile` (required) | array of array | [radius, y] points in metres, in order along the outline. |
+| `segments` | integer | Detail around the axis. Default 32; use 6 or 8 for faceted shapes. |
+
+## `extrude_outline`
+
+Create a flat-sided object from a 2D outline (in the XY plane) with a thickness along Z. The way to model crossguards, axe heads, shields, brackets, signs, gears and any silhouette. Concave outlines are fine. Bevel it afterwards to soften the edges.
+
+| Argument | Type | Description |
+|---|---|---|
+| `depth` (required) | number | Thickness along Z in metres, centred on z = 0. |
+| `name` | string |  |
+| `outline` (required) | array of array | Closed outline as [x, y] points in metres (3 or more). |
+
+## `sweep`
+
+Create a round tube along a path: rope, cables, pipes, rails, rings, chains, and leather or wire wrapped around a grip (use `helix`). Give either `path` points or `helix`.
+
+| Argument | Type | Description |
+|---|---|---|
+| `helix` | object | A spiral around Y centred on the origin, e.g. a grip wrap: {radius: 0.017, height: 0.14, turns: 10}. |
+| `name` | string |  |
+| `path` | array of array | [x, y, z] points in metres. Repeat the first point at the end for a closed loop. |
+| `radii` | array of number | Optional radius per path point (tapering tubes). |
+| `radius` (required) | number | Tube radius in metres. |
+| `segments` | integer | Detail around the tube. Default 12. |
+
+## `deform`
+
+Bend, twist or taper a whole object along an axis (curved blades and horns, twisted bars and ropes, tapering legs and towers). The low end of the axis stays put. Edge loops are added automatically so the curve is smooth.
+
+| Argument | Type | Description |
+|---|---|---|
+| `amount` (required) | number | taper: scale at the far end (0 = point, 0.5 = half). twist and bend: degrees. |
+| `axis` | one of `x`, `y`, `z` | Along which local axis. Default y. |
+| `id` (required) | integer | Object id. |
+| `loops` | integer | Edge loops to add first. Default 24 for bend and twist, 0 for taper. |
+| `mode` (required) | one of `taper`, `twist`, `bend` |  |
+| `toward` | one of `x`, `y`, `z` | bend: which axis the object curves towards (positive side; use a negative amount for the other way). Default x. |
+
+## `slice`
+
+Add evenly spaced edge loops across an object along an axis, so later edits (deform, move_vertices) have vertices to work with.
+
+| Argument | Type | Description |
+|---|---|---|
+| `axis` (required) | one of `x`, `y`, `z` |  |
+| `cuts` (required) | integer |  |
+| `id` (required) | integer | Object id. |
+
+## `move_vertices`
+
+Move or scale the vertices of an object inside a world-space box, for shaping details: pinch a tip, flare a guard's ends, push a dent, widen one end. `falloff` blends the edit smoothly into the surrounding surface. Use slice first if the area has no vertices.
+
+| Argument | Type | Description |
+|---|---|---|
+| `falloff` | number | Width of the soft blend around the box in metres. Default 0. |
+| `id` (required) | integer | Object id. |
+| `max` (required) | array of number | Opposite box corner. |
+| `min` (required) | array of number | Box corner (world space, metres). |
+| `scale` | array of number | Scale around the box centre, e.g. [1.5, 1, 1.5]. |
+| `translate` | array of number | Move by [x, y, z] metres. |
+
 ## `list_objects`
 
 List all objects with id, name, transform, world-space size and bounding box, face count and material.
@@ -175,7 +254,7 @@ Give an object a realistic, textured material in one step: the surface is unwrap
 | `color_hex` | string | Main colour as sRGB hex, e.g. "#5a6b2e", instead of `color`. |
 | `dirt` | number | Grime in creases and dust: 0 clean, 1 filthy. Default 0.3. |
 | `id` (required) | integer | Object id. |
-| `preset` (required) | one of `painted_metal`, `bare_metal`, `rusty_metal`, `plastic`, `wood`, `stone`, `rubber` | painted_metal (paint over metal), bare_metal, rusty_metal, plastic, wood, stone (also concrete), rubber. |
+| `preset` (required) | one of `painted_metal`, `bare_metal`, `rusty_metal`, `plastic`, `wood`, `stone`, `rubber`, `polished_metal`, `gold`, `leather` | painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass and bronze via color), leather (grips, straps, belts), plastic, wood, stone (also concrete), rubber. |
 | `resolution` | one of  | Texture size. Default 1024. |
 | `scale` | number | Size of patterns (blotches, wood grain) in metres. Default 0.15. |
 | `seed` | integer | Change for a different random pattern. |
@@ -195,6 +274,7 @@ Render the scene and return an image so you can check your work. Use it after ev
 
 | Argument | Type | Description |
 |---|---|---|
+| `focus` | array of integer | Object ids to zoom in on (a close-up of small parts such as a hilt or a handle). The rest of the scene is still drawn. |
 | `size` | integer | Pixels per view, 128 to 1024. Default 384. |
 | `views` | array of string |  |
 

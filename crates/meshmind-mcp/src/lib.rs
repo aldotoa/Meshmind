@@ -15,17 +15,28 @@ const MAX_UNDO: usize = 100;
 
 const INSTRUCTIONS: &str = "MeshMind is a 3D modelling engine you drive with tools. Units are metres, Y is up, \
 the ground is y = 0, and objects are created centred on the origin. A good workflow:\n\
-1. Block out: build the big shapes from primitives and place them with set_transform. Check proportions \
-with render_preview before adding detail.\n\
+1. Block out: build each part with the shape tool that matches it, place it with set_transform, and check \
+proportions with render_preview before adding detail. Boxes and plain cylinders look like placeholders, so \
+use them only for boxy parts. Pick the tool by the part's silhouette:\n\
+   - loft: anything that changes cross-section along its length (blades, horns, handles, legs, spires, \
+     fins). A concave cross-section gives grooves such as a sword's fuller.\n\
+   - lathe: anything round (pommels, knobs, bottles, vases, wheels, columns, lamp bases).\n\
+   - extrude_outline: flat parts with a distinctive silhouette (axe heads, shields, brackets, gears).\n\
+   - sweep: tubes along a path (rope, cables, pipes, rings, chains, cord or leather wrapped round a grip).\n\
+   - deform (bend, twist, taper) and move_vertices: curve, twist or reshape a part after creating it.\n\
 2. Detail: inset then extrude (using the returned inner_faces) for panels and recesses, boolean for holes \
-and cut-outs, array and mirror for repeated parts.\n\
+and cut-outs, array and mirror for repeated parts. Separate small parts (rings, rivets, ferrules, straps) \
+add a lot of realism.\n\
 3. Finish shape: bevel hard edges (small amounts, 2 to 3 segments) so they catch light. Do this before \
 materials, because any geometry edit clears UVs and baked textures.\n\
 4. Surface: apply_smart_material per object (edge wear, grime and normal maps are baked from the shape). \
-Use set_material only for flat colours or emissive parts.\n\
-5. Review: render_preview from several views and lighting presets; fix anything that looks wrong.\n\
+polished_metal for blades and armour, gold for brass and gold trim, leather for grips and straps. Use \
+set_material only for flat colours or emissive parts.\n\
+5. Review: render_preview from several views and lighting presets, and use `focus` for close-ups of small \
+parts; fix anything that looks wrong.\n\
 6. Deliver: export_glb for game engines, and save_project so the work can be continued later.\n\
-Every change can be undone. Prompts named model_asset and refine_asset describe this workflow in detail.";
+Every change can be undone. Prompts named model_asset and refine_asset describe this workflow in detail, and \
+docs/RECIPES.md in the MeshMind repository shows worked examples (sword, axe, barrel, potion bottle).";
 
 /// Prompt templates the user's agent can offer (MCP `prompts`).
 fn prompts() -> Value {
@@ -71,12 +82,15 @@ fn get_prompt(params: &Value) -> Result<Value, (i64, String)> {
                 "Using the MeshMind tools, model this game asset: {description}\n\n\
                  Work like a professional 3D artist:\n\
                  1. Decide the real-world size in metres and the main parts. Start with clear_scene.\n\
-                 2. Block out each part with create_primitive and set_transform, giving every object a \
-                 descriptive name. Call render_preview and fix proportions before adding detail.\n\
+                 2. Block out each part with the shape tool that fits its silhouette (loft for tapering \
+                 parts, lathe for round parts, extrude_outline for flat silhouettes, sweep for tubes and \
+                 wraps; create_primitive only for boxy parts) and place it with set_transform, giving \
+                 every object a descriptive name. Call render_preview and fix proportions before adding detail.\n\
                  3. Add detail: inset + extrude for panels, boolean for holes, array/mirror for repeats.\n\
                  4. Bevel hard edges slightly (2-3 segments) so they catch light.\n\
                  5. apply_smart_material on each part with a fitting preset and colour.\n\
-                 6. render_preview under at least two lighting presets, then fix anything that looks off.\n\
+                 6. render_preview under at least two lighting presets, plus close-ups of small parts with \
+                 `focus`, then fix anything that looks off.\n\
                  7. export_glb to {output} and save_project next to it (same name, .meshmind).\n\
                  Finish with a short summary of what you built."
             )

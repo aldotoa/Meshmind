@@ -111,7 +111,9 @@ In `~/.gemini/settings.json`:
   `render_preview` lets them see and fix their own work.
 - MeshMind offers two prompt templates, `model_asset` and `refine_asset`.
   In Claude Code they appear as `/mcp__meshmind__model_asset`.
-- See [EXAMPLES.md](EXAMPLES.md) for prompts that work well, and
+- See [RECIPES.md](RECIPES.md) for worked examples (a longsword, an axe, a
+  barrel and a potion bottle), [EXAMPLES.md](EXAMPLES.md) for prompts that
+  work well, and
   [TOOLS.md](TOOLS.md) for every tool the agent gets.
 
 ## Troubleshooting

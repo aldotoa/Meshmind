@@ -465,3 +465,122 @@ fn hex_colours_are_srgb() {
     );
     assert_eq!(r["isError"], true);
 }
+
+#[test]
+fn shape_tools_build_a_sword() {
+    let mut s = Server::new();
+    let diamond = json!([[1, 0], [0, 1], [-1, 0], [0, -1]]);
+    let blade = call(
+        &mut s,
+        "loft",
+        json!({ "name": "Blade", "shape": diamond, "stations": [
+            { "y": 0, "scale": [0.03, 0.008] },
+            { "y": 0.6, "scale": [0.02, 0.006] },
+            { "y": 0.7, "scale": [0, 0] } ] }),
+    );
+    assert_eq!(blade["isError"], false, "{blade}");
+    let size = &blade["structuredContent"]["size"];
+    assert!((size[1].as_f64().unwrap() - 0.7).abs() < 1e-4);
+    assert!((size[0].as_f64().unwrap() - 0.06).abs() < 1e-4);
+
+    let pommel = call(
+        &mut s,
+        "lathe",
+        json!({ "profile": [[0, 0], [0.03, 0.01], [0.03, 0.03], [0, 0.04]], "segments": 16 }),
+    );
+    assert_eq!(pommel["isError"], false, "{pommel}");
+    let guard = call(
+        &mut s,
+        "extrude_outline",
+        json!({ "outline": [[-0.1, 0], [0.1, 0], [0.1, 0.02], [-0.1, 0.02]], "depth": 0.02 }),
+    );
+    assert_eq!(guard["isError"], false, "{guard}");
+    let wrap = call(
+        &mut s,
+        "sweep",
+        json!({ "helix": { "radius": 0.015, "height": 0.12, "turns": 8 }, "radius": 0.003 }),
+    );
+    assert_eq!(wrap["isError"], false, "{wrap}");
+    let ring = call(
+        &mut s,
+        "sweep",
+        json!({ "path": [[0.1, 0, 0], [0, 0, 0.1], [-0.1, 0, 0], [0, 0, -0.1], [0.1, 0, 0]], "radius": 0.01 }),
+    );
+    assert_eq!(ring["isError"], false, "{ring}");
+
+    let bad = call(
+        &mut s,
+        "loft",
+        json!({ "shape": diamond, "stations": [{ "y": 0 }] }),
+    );
+    assert_eq!(bad["isError"], true);
+    let bad = call(&mut s, "sweep", json!({ "radius": 0.01 }));
+    assert_eq!(bad["isError"], true);
+
+    // Close-up render of the small parts.
+    let id = |v: &Value| v["structuredContent"]["id"].clone();
+    let r = call(
+        &mut s,
+        "render_preview",
+        json!({ "views": ["front"], "size": 128, "focus": [id(&pommel), id(&wrap)] }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let r = call(&mut s, "render_preview", json!({ "focus": [999] }));
+    assert_eq!(r["isError"], true);
+}
+
+#[test]
+fn deform_slice_and_move_vertices() {
+    let mut s = Server::new();
+    let bar = call(
+        &mut s,
+        "create_primitive",
+        json!({ "shape": "cube", "size": 0.1 }),
+    )["structuredContent"]["id"]
+        .clone();
+    call(
+        &mut s,
+        "set_transform",
+        json!({ "id": bar, "scale": [1, 10, 1] }),
+    );
+    let bent = call(
+        &mut s,
+        "deform",
+        json!({ "id": bar, "mode": "bend", "amount": 90, "toward": "x" }),
+    );
+    assert_eq!(bent["isError"], false, "{bent}");
+    let obj = call(&mut s, "get_object", json!({ "id": bar }))["structuredContent"].clone();
+    // A 90 degree bend moves the top of the bar off to the side.
+    assert!(obj["bounds_max"][0].as_f64().unwrap() > 0.3, "{obj}");
+
+    let sliced = call(
+        &mut s,
+        "slice",
+        json!({ "id": bar, "axis": "y", "cuts": 4 }),
+    );
+    assert_eq!(sliced["isError"], false, "{sliced}");
+    let moved = call(
+        &mut s,
+        "move_vertices",
+        json!({ "id": bar, "min": [-1, -1, -1], "max": [1, 0, 1], "translate": [0, -0.1, 0] }),
+    );
+    assert_eq!(moved["isError"], false, "{moved}");
+    assert!(
+        moved["structuredContent"]["moved_vertices"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    let none = call(
+        &mut s,
+        "move_vertices",
+        json!({ "id": bar, "min": [5, 5, 5], "max": [6, 6, 6], "translate": [0, 1, 0] }),
+    );
+    assert_eq!(none["isError"], true);
+    let bad = call(
+        &mut s,
+        "deform",
+        json!({ "id": bar, "mode": "melt", "amount": 1 }),
+    );
+    assert_eq!(bad["isError"], true);
+}

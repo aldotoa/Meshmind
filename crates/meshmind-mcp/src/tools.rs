@@ -6,10 +6,10 @@ use std::sync::Arc;
 use meshmind_core::smart::{self, Preset, SmartMaterial};
 use meshmind_core::uv::{self, UnwrapOptions};
 use meshmind_core::{
-    csg, export, ops, Axis, BooleanOp, LightingPreset, Material, MaterialTextures, Primitive,
-    Scene, Selection,
+    csg, deform, export, ops, shapes, Axis, BooleanOp, LightingPreset, Material, MaterialTextures,
+    Primitive, Scene, Selection,
 };
-use meshmind_render::{render_sheet, View};
+use meshmind_render::{render_sheet_focused, View};
 use serde_json::{json, Value};
 
 /// What a tool returns: structured data, plus an optional PNG image.
@@ -87,6 +87,85 @@ pub fn definitions() -> Value {
                 "segments": { "type": "integer", "description": "Detail around the axis. Default 32." },
                 "rings": { "type": "integer", "description": "Sphere rings, or torus tube segments. Default 16." }
             }), &["shape"]),
+        tool("loft",
+            "Create an object by sweeping one cross-section shape up the Y axis through stations, \
+             each scaling and shifting it. The way to model blades, swords, knives, horns, tapered \
+             handles, table legs and spires. Example sword blade: a lens or diamond `shape` about 1 \
+             wide and 0.2 thick, stations [{y:0, scale:[0.025,0.03]}, {y:0.65, scale:[0.022,0.025]}, \
+             {y:0.78, scale:[0.012,0.02]}, {y:0.82, scale:[0,0]}] for a blade 5 cm wide tapering to \
+             a point. A concave shape (a groove in each face) makes a fuller. Edges sharper than 50 \
+             degrees render crisp, so a pointed shape gives a sharp cutting edge.",
+            json!({ "name": { "type": "string" },
+                    "shape": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                        "description": "Closed outline as [x, z] points (3 or more), centred on 0. Scaled by each station." },
+                    "stations": { "type": "array", "items": { "type": "object", "properties": {
+                            "y": { "type": "number", "description": "Height in metres; must increase." },
+                            "scale": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, z] scale of the shape. [0, 0] makes a point." },
+                            "offset": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2, "description": "[x, z] shift of the section (curved blades, leaning shapes)." } },
+                        "required": ["y"] }, "description": "2 or more cross-sections from bottom to top." } }),
+            &["shape", "stations"]),
+        tool("lathe",
+            "Create a round object by spinning a side profile around the Y axis, like a potter's \
+             wheel. The way to model pommels, knobs, bottles, vases, goblets, wheels, columns and \
+             finials. Profile points are [radius, y] from bottom to top; radius 0 closes the shape \
+             on the axis. Sharp corners in the profile stay crisp.",
+            json!({ "name": { "type": "string" },
+                    "profile": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                        "description": "[radius, y] points in metres, in order along the outline." },
+                    "segments": { "type": "integer", "description": "Detail around the axis. Default 32; use 6 or 8 for faceted shapes." } }),
+            &["profile"]),
+        tool("extrude_outline",
+            "Create a flat-sided object from a 2D outline (in the XY plane) with a thickness along Z. \
+             The way to model crossguards, axe heads, shields, brackets, signs, gears and any \
+             silhouette. Concave outlines are fine. Bevel it afterwards to soften the edges.",
+            json!({ "name": { "type": "string" },
+                    "outline": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                        "description": "Closed outline as [x, y] points in metres (3 or more)." },
+                    "depth": { "type": "number", "description": "Thickness along Z in metres, centred on z = 0." } }),
+            &["outline", "depth"]),
+        tool("sweep",
+            "Create a round tube along a path: rope, cables, pipes, rails, rings, chains, and leather \
+             or wire wrapped around a grip (use `helix`). Give either `path` points or `helix`.",
+            json!({ "name": { "type": "string" },
+                    "path": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                        "description": "[x, y, z] points in metres. Repeat the first point at the end for a closed loop." },
+                    "helix": { "type": "object", "properties": {
+                            "radius": { "type": "number" }, "height": { "type": "number" },
+                            "turns": { "type": "number" }, "points_per_turn": { "type": "integer" } },
+                        "description": "A spiral around Y centred on the origin, e.g. a grip wrap: {radius: 0.017, height: 0.14, turns: 10}." },
+                    "radius": { "type": "number", "description": "Tube radius in metres." },
+                    "radii": { "type": "array", "items": { "type": "number" }, "description": "Optional radius per path point (tapering tubes)." },
+                    "segments": { "type": "integer", "description": "Detail around the tube. Default 12." } }),
+            &["radius"]),
+        tool("deform",
+            "Bend, twist or taper a whole object along an axis (curved blades and horns, twisted \
+             bars and ropes, tapering legs and towers). The low end of the axis stays put. Edge \
+             loops are added automatically so the curve is smooth.",
+            json!({ "id": id_prop(),
+                    "mode": { "type": "string", "enum": ["taper", "twist", "bend"] },
+                    "axis": { "type": "string", "enum": ["x", "y", "z"], "description": "Along which local axis. Default y." },
+                    "amount": { "type": "number", "description": "taper: scale at the far end (0 = point, 0.5 = half). twist and bend: degrees." },
+                    "toward": { "type": "string", "enum": ["x", "y", "z"], "description": "bend: which axis the object curves towards (positive side; use a negative amount for the other way). Default x." },
+                    "loops": { "type": "integer", "description": "Edge loops to add first. Default 24 for bend and twist, 0 for taper." } }),
+            &["id", "mode", "amount"]),
+        tool("slice",
+            "Add evenly spaced edge loops across an object along an axis, so later edits (deform, \
+             move_vertices) have vertices to work with.",
+            json!({ "id": id_prop(),
+                    "axis": { "type": "string", "enum": ["x", "y", "z"] },
+                    "cuts": { "type": "integer", "minimum": 1, "maximum": 64 } }),
+            &["id", "axis", "cuts"]),
+        tool("move_vertices",
+            "Move or scale the vertices of an object inside a world-space box, for shaping details: \
+             pinch a tip, flare a guard's ends, push a dent, widen one end. `falloff` blends the \
+             edit smoothly into the surrounding surface. Use slice first if the area has no vertices.",
+            json!({ "id": id_prop(),
+                    "min": vec3_schema("Box corner (world space, metres)."),
+                    "max": vec3_schema("Opposite box corner."),
+                    "translate": vec3_schema("Move by [x, y, z] metres."),
+                    "scale": vec3_schema("Scale around the box centre, e.g. [1.5, 1, 1.5]."),
+                    "falloff": { "type": "number", "description": "Width of the soft blend around the box in metres. Default 0." } }),
+            &["id", "min", "max"]),
         tool("list_objects",
             "List all objects with id, name, transform, world-space size and bounding box, face count and material.",
             json!({}), &[]),
@@ -184,7 +263,7 @@ pub fn definitions() -> Value {
              follows them.",
             json!({ "id": id_prop(),
                     "preset": { "type": "string", "enum": Preset::ALL.map(|p| p.name()),
-                        "description": "painted_metal (paint over metal), bare_metal, rusty_metal, plastic, wood, stone (also concrete), rubber." },
+                        "description": "painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass and bronze via color), leather (grips, straps, belts), plastic, wood, stone (also concrete), rubber." },
                     "color": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3,
                         "description": "Main colour, linear RGB 0 to 1 (paint colour for painted_metal). Defaults to the preset's." },
                     "color_hex": { "type": "string", "description": "Main colour as sRGB hex, e.g. \"#5a6b2e\", instead of `color`." },
@@ -206,7 +285,9 @@ pub fn definitions() -> Value {
              in a 2x2 grid (left to right, top to bottom).",
             json!({ "views": { "type": "array", "items": { "type": "string",
                         "enum": ["front", "back", "left", "right", "top", "three_quarter"] } },
-                    "size": { "type": "integer", "description": "Pixels per view, 128 to 1024. Default 384." } }),
+                    "size": { "type": "integer", "description": "Pixels per view, 128 to 1024. Default 384." },
+                    "focus": { "type": "array", "items": { "type": "integer" },
+                        "description": "Object ids to zoom in on (a close-up of small parts such as a hilt or a handle). The rest of the scene is still drawn." } }),
             &[]),
         tool("export_glb",
             "Save the whole scene as a .glb file (glTF 2.0) for Unity, Unreal, Godot, Blender or the web.",
@@ -231,6 +312,44 @@ pub fn definitions() -> Value {
 pub fn call(scene: &mut Scene, name: &str, args: &Value) -> Option<Result<ToolOutput, String>> {
     let r: Result<ToolOutput, String> = match name {
         "create_primitive" => create_primitive(scene, args).map(Into::into),
+        "loft" | "lathe" | "extrude_outline" | "sweep" => {
+            create_shape(scene, name, args).map(Into::into)
+        }
+        "deform" => edit(scene, args, |m, _, a| {
+            let mode = a.get("mode").and_then(Value::as_str).unwrap_or_default();
+            let axis = axis_arg(a, "axis")?.unwrap_or(Axis::Y);
+            let amount = number(a, "amount")?;
+            let how = match mode {
+                "taper" => deform::Deform::Taper { end_scale: amount },
+                "twist" => deform::Deform::Twist { degrees: amount },
+                "bend" => deform::Deform::Bend {
+                    degrees: amount,
+                    toward: axis_arg(a, "toward")?.unwrap_or(if axis == Axis::X {
+                        Axis::Y
+                    } else {
+                        Axis::X
+                    }),
+                },
+                _ => return Err("`mode` must be taper, twist or bend".into()),
+            };
+            let default_loops = if mode == "taper" { 0 } else { 24 };
+            let loops = a
+                .get("loops")
+                .and_then(Value::as_u64)
+                .unwrap_or(default_loops)
+                .min(128) as u32;
+            let sliced = deform::slice(m, axis, loops);
+            deform::deform(&sliced, axis, how)
+        }),
+        "slice" => edit(scene, args, |m, _, a| {
+            let axis = axis_arg(a, "axis")?.ok_or("`axis` is required")?;
+            let cuts = a
+                .get("cuts")
+                .and_then(Value::as_u64)
+                .ok_or("`cuts` is required")?;
+            Ok(deform::slice(m, axis, cuts.clamp(1, 64) as u32))
+        }),
+        "move_vertices" => move_vertices(scene, args).map(Into::into),
         "list_objects" => Ok(list_objects(scene).into()),
         "get_object" => get_object(scene, args).map(Into::into),
         "set_transform" => set_transform(scene, args).map(Into::into),
@@ -603,6 +722,144 @@ fn create_primitive(scene: &mut Scene, args: &Value) -> Result<Value, String> {
     Ok(json!({ "id": id, "name": name }))
 }
 
+fn axis_arg(args: &Value, key: &str) -> Result<Option<Axis>, String> {
+    match args.get(key).and_then(Value::as_str) {
+        None => Ok(None),
+        Some("x") => Ok(Some(Axis::X)),
+        Some("y") => Ok(Some(Axis::Y)),
+        Some("z") => Ok(Some(Axis::Z)),
+        Some(_) => Err(format!("`{key}` must be \"x\", \"y\" or \"z\"")),
+    }
+}
+
+fn points2(args: &Value, key: &str) -> Result<Vec<glam::Vec2>, String> {
+    let arr = args
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or(format!("`{key}` must be a list of [x, y] points"))?;
+    arr.iter()
+        .map(|p| {
+            let a = p.as_array().filter(|a| a.len() == 2);
+            let n = |i: usize| a.and_then(|a| a[i].as_f64()).map(|v| v as f32);
+            match (n(0), n(1)) {
+                (Some(x), Some(y)) => Ok(glam::Vec2::new(x, y)),
+                _ => Err(format!("every point in `{key}` must be two numbers")),
+            }
+        })
+        .collect()
+}
+
+fn create_shape(scene: &mut Scene, kind: &str, args: &Value) -> Result<Value, String> {
+    let mesh = match kind {
+        "loft" => {
+            let shape = points2(args, "shape")?;
+            let stations: Vec<shapes::Station> =
+                serde_json::from_value(args.get("stations").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("`stations`: {e}"))?;
+            shapes::loft(&shape, &stations)?
+        }
+        "lathe" => {
+            let segments = args.get("segments").and_then(Value::as_u64).unwrap_or(32) as u32;
+            shapes::lathe(&points2(args, "profile")?, segments)?
+        }
+        "extrude_outline" => {
+            shapes::extrude_outline(&points2(args, "outline")?, positive(args, "depth", None)?)?
+        }
+        _ => {
+            let radius = positive(args, "radius", None)?;
+            let segments = args.get("segments").and_then(Value::as_u64).unwrap_or(12) as u32;
+            let path: Vec<Vec3> = if let Some(h) = args.get("helix").filter(|v| !v.is_null()) {
+                shapes::helix(
+                    positive(h, "radius", None)?,
+                    number(h, "height")?,
+                    positive(h, "turns", None)?,
+                    h.get("points_per_turn")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(24) as u32,
+                )
+            } else {
+                let arr = args
+                    .get("path")
+                    .and_then(Value::as_array)
+                    .ok_or("give `path` points or a `helix`")?;
+                arr.iter()
+                    .map(|p| {
+                        let a: Option<Vec<f32>> = p.as_array().map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_f64().map(|v| v as f32))
+                                .collect()
+                        });
+                        match a {
+                            Some(a) if a.len() == 3 => Ok(Vec3::new(a[0], a[1], a[2])),
+                            _ => Err("every `path` point must be [x, y, z]".to_string()),
+                        }
+                    })
+                    .collect::<Result<_, _>>()?
+            };
+            let radii: Option<Vec<f32>> = args.get("radii").and_then(Value::as_array).map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_f64().map(|v| v as f32))
+                    .collect()
+            });
+            shapes::sweep(&path, radius, radii.as_deref(), segments)?
+        }
+    };
+    mesh.validate()?;
+    let default_name = match kind {
+        "loft" => "Loft",
+        "lathe" => "Lathe",
+        "extrude_outline" => "Outline",
+        _ => "Tube",
+    };
+    let name = args
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or(default_name);
+    let faces = mesh.faces.len();
+    let size = mesh.bounds().map(|b| b.size().to_array());
+    let id = scene.add_object(name, mesh).map_err(|e| e.to_string())?;
+    Ok(json!({ "id": id, "name": name, "faces": faces, "size": size }))
+}
+
+fn move_vertices(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let id = object_id(args, "id")?;
+    apply_object_scale(scene, id)?;
+    let obj = scene.object(id).map_err(|e| e.to_string())?;
+    let min = Vec3::from(floats::<3>(args, "min")?.ok_or("`min` is required")?);
+    let max = Vec3::from(floats::<3>(args, "max")?.ok_or("`max` is required")?);
+    let translate = floats::<3>(args, "translate")?
+        .map(Vec3::from)
+        .unwrap_or(Vec3::ZERO);
+    let scale = floats::<3>(args, "scale")?
+        .map(Vec3::from)
+        .unwrap_or(Vec3::ONE);
+    let falloff = args
+        .get("falloff")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .max(0.0) as f32;
+    let m = obj.transform.matrix();
+    let world = obj.mesh.transformed(&m);
+    let (moved_world, count) = deform::move_vertices(
+        &world,
+        min.min(max),
+        min.max(max),
+        translate,
+        scale,
+        falloff,
+    )?;
+    let local = moved_world.transformed(&m.inverse());
+    let textured = scene
+        .material(obj.material)
+        .is_ok_and(|m| m.textures.is_some());
+    scene.set_mesh(id, local).map_err(|e| e.to_string())?;
+    let mut out = json!({ "id": id, "moved_vertices": count });
+    if textured {
+        out["note"] = json!("This object's baked textures no longer match its shape. Call apply_smart_material again when the shape is final.");
+    }
+    Ok(out)
+}
+
 fn object_summary(o: &meshmind_core::Object) -> Value {
     let t = &o.transform;
     let (x, y, z) = t.rotation.to_euler(EulerRot::XYZ);
@@ -766,7 +1023,19 @@ fn render_preview(scene: &Scene, args: &Value) -> Result<ToolOutput, String> {
         .and_then(Value::as_u64)
         .unwrap_or(384)
         .clamp(128, 1024) as u32;
-    let img = render_sheet(scene, &views, size);
+    let focus: Option<Vec<u32>> = match args.get("focus").and_then(Value::as_array) {
+        Some(ids) if !ids.is_empty() => Some(
+            ids.iter()
+                .map(|v| {
+                    let id = v.as_u64().ok_or("`focus` must be a list of object ids")? as u32;
+                    scene.object(id).map_err(|e| e.to_string())?;
+                    Ok(id)
+                })
+                .collect::<Result<_, String>>()?,
+        ),
+        _ => None,
+    };
+    let img = render_sheet_focused(scene, &views, size, focus.as_deref());
     Ok(ToolOutput {
         data: json!({ "views": views.iter().map(|v| v.name()).collect::<Vec<_>>(), "width": img.width, "height": img.height }),
         image_png: Some(img.to_png()),

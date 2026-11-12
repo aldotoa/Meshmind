@@ -62,8 +62,8 @@ fn to_manifold(mesh: &PolyMesh, face_base: usize) -> Result<Manifold, String> {
                 id
             })
             .collect();
-        for i in 1..ids.len() - 1 {
-            tris.extend_from_slice(&[ids[0], ids[i], ids[i + 1]]);
+        for t in mesh.triangulate_face(f) {
+            tris.extend_from_slice(&[ids[t[0]], ids[t[1]], ids[t[2]]]);
         }
     }
     let opts = MeshGL64Options::new().merge_vertices(&merge_from, &merge_to);

@@ -5,6 +5,7 @@
 
 pub mod bevel;
 pub mod csg;
+pub mod deform;
 pub mod export;
 pub mod lighting;
 pub mod material;
@@ -14,6 +15,7 @@ pub mod poly;
 pub mod primitives;
 pub mod project;
 pub mod scene;
+pub mod shapes;
 pub mod smart;
 pub mod texture;
 pub mod uv;
