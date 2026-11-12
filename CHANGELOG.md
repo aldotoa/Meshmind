@@ -6,6 +6,10 @@ All notable changes are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Viewer: the floor's shadow and grid no longer draw across objects that
+  reach below y = 0; the floor now moves down to the lowest object.
+
 ## [0.1.0] - first public release
 
 ### Modelling

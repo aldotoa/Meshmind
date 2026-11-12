@@ -53,7 +53,7 @@ function applyLighting(lighting) {
   scene.background = col(p.background_top).lerp(col(p.background_bottom), 0.6);
   renderer.toneMappingExposure = p.exposure;
   document.getElementById("lighting").value = lighting.name;
-  frameAll();
+  fitStage();
 }
 const sunOffset = new THREE.Vector3(4, 8, 5);
 
@@ -157,11 +157,29 @@ function frameAll() {
   const dir = camera.position.clone().sub(controls.target).normalize();
   controls.target.copy(sphere.center);
   camera.position.copy(sphere.center).addScaledVector(dir, dist);
-  // Keep shadows covering the model.
+}
+
+// Keep the floor under the model and the shadow camera around it. The floor
+// is y = 0, but anything that dips below (a primitive still centred on the
+// origin, say) pushes it down, so the floor never cuts through an object and
+// its shadow and grid never draw across the model.
+function fitStage() {
+  const box = new THREE.Box3().setFromObject(models);
+  if (box.isEmpty()) {
+    ground.position.y = 0;
+    grid.position.y = 0.0005;
+    return;
+  }
+  const floor = Math.min(0, box.min.y);
+  ground.position.y = floor;
+  grid.position.y = floor + 0.0005;
+  box.expandByPoint(new THREE.Vector3(box.min.x, floor, box.min.z));
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
   const s = Math.max(sphere.radius * 2, 2);
-  Object.assign(sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 0.1, far: 50 });
+  const reach = sphere.radius * 3 + 5;
+  Object.assign(sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 0.1, far: reach * 2 });
   sun.target.position.copy(sphere.center);
-  sun.position.copy(sphere.center).add(sunOffset.clone().multiplyScalar(Math.max(sphere.radius, 1) / 4));
+  sun.position.copy(sphere.center).add(sunOffset.clone().normalize().multiplyScalar(reach));
   sun.shadow.camera.updateProjectionMatrix();
 }
 
@@ -180,6 +198,7 @@ async function refresh() {
     }
     for (const m of built) models.add(m);
     applyLighting(snap.lighting);
+    fitStage();
     renderList(snap.objects);
     const faces = snap.objects.reduce((n, o) => n + o.faces, 0);
     document.getElementById("stats").textContent =
