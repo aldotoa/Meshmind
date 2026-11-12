@@ -25,6 +25,10 @@ All notable changes are listed here. The format follows
   barrel, potion bottle.
 
 ### Changed
+- Desktop viewer: a studio environment with soft boxes and a horizon band
+  for reflections (matching the agent's preview), soft contact shadows where
+  objects meet the floor, a gradient background, sharper soft shadows, a
+  quieter grid, glass via physical transmission, and a Turntable button (T).
 - Preview renderer: studio soft boxes and a horizon band in reflections,
   shadow-mapped key light, floor shadow and contact shadow. The studio
   background is darker.

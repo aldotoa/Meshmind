@@ -6,3 +6,4 @@ apps/desktop/src-tauri/gen
 demo.png
 bevels.png
 smart.png
+__pycache__/
