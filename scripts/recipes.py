@@ -1,7 +1,7 @@
 """Worked modelling recipes, built by driving meshmind-mcp exactly as an agent would.
 
     cargo build --release -p meshmind-mcp
-    python3 scripts/recipes.py [output-dir] [sword|axe|barrel|bottle ...]
+    python3 scripts/recipes.py [output-dir] [sword|axe|barrel|bottle|pillar|orc ...]
 
 docs/RECIPES.md explains each step. Every call here is an ordinary MCP tool
 call over stdio, so an agent can follow the same steps.
@@ -140,6 +140,26 @@ def bottle():
     cord = m("sweep", name="Cord", path=circle(0.0155, 0, 24), radius=0.0025, segments=8)["id"]
     m("set_transform", id=cord, translation=[0, 0.125, 0])
     m("apply_smart_material", id=cord, preset="leather", color_hex="#5a3a22", wear=0.3)
+
+
+def pillar():
+    # A weathered stone pillar: sculpt dense detail, then bake it down to a prop budget.
+    p = m("lathe", name="Pillar", segments=16, profile=[
+        [0, 0], [0.32, 0], [0.32, 0.12], [0.26, 0.16], [0.22, 0.2], [0.2, 1.3], [0.24, 1.36], [0.3, 1.4], [0.3, 1.5], [0, 1.5]])["id"]
+    m("subdivide", id=p, levels=3, smooth=False)
+    m("subdivide", id=p, levels=1, smooth=True)
+    for k in range(8):  # flutes
+        a = 2 * math.pi * k / 8
+        m("sculpt", id=p, brush="crease", radius=0.035, strength=0.012, symmetric=False,
+          points=[[0.205 * math.cos(a), 0.25 + 0.1 * i, 0.205 * math.sin(a)] for i in range(11)])
+    m("sculpt", id=p, brush="crease", radius=0.02, strength=0.015, symmetric=False,  # a crack
+      points=[[0.2, 0.5, 0.02], [0.19, 0.62, 0.06], [0.2, 0.7, 0.03], [0.18, 0.85, 0.09]])
+    m("sculpt", id=p, brush="flatten", points=[[0.29, 1.45, 0.08]], radius=0.08, strength=1.0, symmetric=False)
+    m("sculpt", id=p, brush="noise", radius=0.05, strength=0.004, scale=0.02, symmetric=False)
+    m("apply_smart_material", id=p, preset="stone", color_hex="#9a9184", wear=0.6, dirt=0.6)
+    # About 70000 triangles down to 3000, plus LODs of 1500 and 750.
+    m("make_game_ready", id=p, triangles=3000)
+    return {"focus_point": [0, 0.75, 0.2], "focus_radius": 0.3}
 
 
 def orc():

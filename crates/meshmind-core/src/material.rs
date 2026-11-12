@@ -28,12 +28,23 @@ pub struct Material {
     /// the factors above multiply them, as in glTF.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub textures: Option<Arc<MaterialTextures>>,
+    /// The smart material the textures were baked from, so they can be baked
+    /// again (for example after detail baking or polygon reduction).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smart: Option<SmartSource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SmartSource {
+    pub material: crate::smart::SmartMaterial,
+    pub resolution: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MaterialTextures {
     pub base_color: Texture,
-    /// G = roughness, B = metallic.
+    /// R = ambient occlusion, G = roughness, B = metallic (glTF packs
+    /// occlusion into the same texture's red channel).
     pub metallic_roughness: Texture,
     pub normal: Texture,
 }
@@ -57,6 +68,7 @@ impl Default for Material {
             transmission: 0.0,
             ior: 1.5,
             textures: None,
+            smart: None,
         }
     }
 }

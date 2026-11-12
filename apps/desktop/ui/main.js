@@ -260,6 +260,7 @@ async function texturesFor(materialId) {
         roughnessMap: loadTex(urls.metallic_roughness, false),
         metalnessMap: loadTex(urls.metallic_roughness, false),
         normalMap: loadTex(urls.normal, false),
+        aoMap: loadTex(urls.metallic_roughness, false), // occlusion in red
       }));
   }
   return textureCache.get(materialId);

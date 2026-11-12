@@ -3,9 +3,12 @@
 use glam::{EulerRot, Quat, Vec3};
 use std::sync::Arc;
 
+use meshmind_core::bake::{self as detail_bake, BakeOptions};
 use meshmind_core::character::{self, CharacterParams};
+use meshmind_core::material::SmartSource;
 use meshmind_core::sculpt::{self as brushes, Brush, Stroke};
 use meshmind_core::sdf::{self, MeshOptions, SdfPart};
+use meshmind_core::simplify::simplify;
 use meshmind_core::smart::{self, Preset, SmartMaterial};
 use meshmind_core::uv::{self, UnwrapOptions};
 use meshmind_core::{
@@ -38,6 +41,7 @@ pub fn is_mutating(name: &str) -> bool {
             | "get_object"
             | "check_asset"
             | "render_preview"
+            | "compare_to_reference"
             | "export_glb"
             | "save_project"
             | "undo"
@@ -260,6 +264,36 @@ pub fn definitions() -> Value {
                     "scale": { "type": "number", "description": "noise only: bump size in metres. Default radius / 4." },
                     "symmetric": { "type": "boolean", "description": "Also apply mirrored across x = 0. Default true." } }),
             &["id", "brush", "radius"]),
+        tool("make_game_ready",
+            "The last modelling step for a dense or sculpted object (characters, creatures, sculpted \
+             props, anything over a few thousand triangles): reduce it to a game budget, bake every \
+             sculpted crease and bump into a normal map plus ambient occlusion, re-apply its smart \
+             material on top, and build LODs (lighter copies for distance, exported as _LOD1, _LOD2). \
+             It looks almost the same up close at a fraction of the triangles. Do it after the shape \
+             and materials are final; undo restores the dense version.",
+            json!({ "id": id_prop(),
+                    "triangles": { "type": "integer", "description": "Target triangle count. Default: a fifth of the current count, between 500 and 20000. Typical budgets: hero character 15000 to 40000, enemy 5000 to 15000, weapon 1500 to 5000, small prop 300 to 1500." },
+                    "lods": { "type": "array", "items": { "type": "number" }, "description": "Fractions of `triangles` for each LOD. Default [0.5, 0.25]; [] for none." },
+                    "resolution": { "type": "integer", "enum": [512, 1024, 2048], "description": "Texture size. Default 1024 (2048 for hero assets)." } }),
+            &["id"]),
+        tool("decimate",
+            "Reduce an object's triangle count while keeping its shape (quadric edge collapse). \
+             make_game_ready does this plus baking, so prefer it; use decimate for quick low-poly \
+             versions. Clears UVs and baked textures.",
+            json!({ "id": id_prop(),
+                    "triangles": { "type": "integer", "description": "Target triangle count." },
+                    "ratio": { "type": "number", "description": "Or a fraction of the current count, e.g. 0.25." } }),
+            &["id"]),
+        tool("bake_detail",
+            "Bake the surface detail of a dense object (`source`) onto a lighter object (`id`) that \
+             covers the same shape, as a normal map and ambient occlusion, then re-apply the light \
+             object's material on top. For hand-made low-poly versions; make_game_ready does the \
+             whole job in one step.",
+            json!({ "id": id_prop(),
+                    "source": { "type": "integer", "description": "The dense, detailed object." },
+                    "resolution": { "type": "integer", "enum": [512, 1024, 2048] },
+                    "distance": { "type": "number", "description": "How far apart the two surfaces may be, in metres. Default 2% of the object's size." } }),
+            &["id", "source"]),
         tool("list_objects",
             "List all objects with id, name, transform, world-space size and bounding box, face count and material.",
             json!({}), &[]),
@@ -396,6 +430,23 @@ pub fn definitions() -> Value {
                     "focus_point": vec3_schema("Zoom in on this world point instead, e.g. a character's head_center or hand landmark."),
                     "focus_radius": { "type": "number", "description": "With focus_point: how much to show around it, in metres. Default 0.3." } }),
             &[]),
+        tool("set_reference",
+            "Load a reference image (concept art, a photo, a sketch: PNG or JPEG file) to model from. \
+             Ask the user for one whenever they describe something specific, and work from it: AAA \
+             models match their reference. `view` says which camera angle it shows. Loading another \
+             with the same name replaces it.",
+            json!({ "path": { "type": "string", "description": "PNG or JPEG file path." },
+                    "view": { "type": "string", "enum": ["front", "back", "left", "right", "three_quarter"], "description": "The angle the image shows. Default front." },
+                    "name": { "type": "string", "description": "Label, e.g. \"front sketch\". Defaults to the view." } }),
+            &["path"]),
+        tool("compare_to_reference",
+            "Render the model from the reference's angle next to the reference, plus the model's \
+             outline drawn over the reference (matched by height), and measure where the silhouette \
+             is too wide or too narrow. Use it after blocking out and after every round of changes: \
+             fix silhouette and proportions first, then missing parts, then detail and materials.",
+            json!({ "name": { "type": "string", "description": "Which reference. Default: the latest." },
+                    "size": { "type": "integer", "description": "Panel height in pixels, 192 to 768. Default 448." } }),
+            &[]),
         tool("export_glb",
             "Save the whole scene as a .glb file (glTF 2.0) for Unity, Unreal, Godot, Blender or the web.",
             json!({ "path": { "type": "string", "description": "File path ending in .glb." } }),
@@ -460,6 +511,9 @@ pub fn call(scene: &mut Scene, name: &str, args: &Value) -> Option<Result<ToolOu
         "create_character" => create_character(scene, args).map(Into::into),
         "sculpt_body" => sculpt_body(scene, args).map(Into::into),
         "sculpt" => sculpt(scene, args).map(Into::into),
+        "decimate" => decimate(scene, args).map(Into::into),
+        "bake_detail" => bake_detail(scene, args).map(Into::into),
+        "make_game_ready" => make_game_ready(scene, args).map(Into::into),
         "list_objects" => Ok(list_objects(scene).into()),
         "check_asset" => Ok(check_asset(scene).into()),
         "get_object" => get_object(scene, args).map(Into::into),
@@ -545,6 +599,8 @@ pub fn call(scene: &mut Scene, name: &str, args: &Value) -> Option<Result<ToolOu
                 })
         }
         "render_preview" => render_preview(scene, args),
+        "set_reference" => crate::reference::set_reference(scene, args).map(Into::into),
+        "compare_to_reference" => crate::reference::compare_to_reference(scene, args),
         "export_glb" => export_glb(scene, args).map(Into::into),
         "save_project" => save_project(scene, args).map(Into::into),
         "open_project" => open_project(scene, args).map(Into::into),
@@ -1310,6 +1366,193 @@ fn sculpt(scene: &mut Scene, args: &Value) -> Result<Value, String> {
     Ok(out)
 }
 
+fn tri_count(m: &meshmind_core::PolyMesh) -> usize {
+    m.faces
+        .iter()
+        .map(|f| f.verts.len().saturating_sub(2))
+        .sum()
+}
+
+fn decimate(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let id = object_id(args, "id")?;
+    let before = tri_count(&scene.object(id).map_err(|e| e.to_string())?.mesh);
+    let target = match (
+        args.get("triangles").and_then(Value::as_u64),
+        args.get("ratio").and_then(Value::as_f64),
+    ) {
+        (Some(t), _) => t as usize,
+        (None, Some(r)) if r > 0.0 && r <= 1.0 => (before as f64 * r) as usize,
+        _ => return Err("give `triangles` or a `ratio` between 0 and 1".into()),
+    };
+    let mut out = edit(scene, args, |m, _, _| simplify(m, target))?;
+    let after = tri_count(&scene.object(id).map_err(|e| e.to_string())?.mesh);
+    out.data["triangles_before"] = json!(before);
+    out.data["triangles"] = json!(after);
+    Ok(out.data)
+}
+
+/// Bake the object's material again, on top of its baked detail. Objects
+/// without a smart material get flat-colour textures that carry the detail.
+fn rebake_material(scene: &mut Scene, id: u32, resolution: u32) -> Result<(), String> {
+    let obj = scene.object(id).map_err(|e| e.to_string())?;
+    let mesh = obj.mesh.clone();
+    let detail = obj.detail.clone();
+    let name = obj.name.clone();
+    let old = scene
+        .material(obj.material)
+        .map_err(|e| e.to_string())?
+        .clone();
+    let material = if let Some(src) = &old.smart {
+        let baked = smart::bake_with_detail(
+            &mesh,
+            &src.material,
+            src.resolution.max(resolution),
+            detail.as_deref(),
+        )?;
+        Material {
+            textures: Some(Arc::new(MaterialTextures {
+                base_color: baked.base_color,
+                metallic_roughness: baked.metallic_roughness,
+                normal: baked.normal,
+            })),
+            smart: Some(SmartSource {
+                material: src.material.clone(),
+                resolution: src.resolution.max(resolution),
+            }),
+            ..old
+        }
+    } else {
+        let Some(d) = detail else { return Ok(()) };
+        let n = d.normal.width;
+        let mut base = meshmind_core::texture::Texture::new("base_color", n, n);
+        let mut mr = meshmind_core::texture::Texture::new("metallic_roughness", n, n);
+        for y in 0..n {
+            for x in 0..n {
+                let ao = d.occlusion.get(x, y)[0];
+                let shade = (140 + ao as u32 * 115 / 255) as u8;
+                base.set(x, y, [shade, shade, shade, 255]);
+                mr.set(x, y, [ao, 255, 255, 255]);
+            }
+        }
+        Material {
+            name: format!("{name} (baked)"),
+            textures: Some(Arc::new(MaterialTextures {
+                base_color: base,
+                metallic_roughness: mr,
+                normal: d.normal.clone(),
+            })),
+            ..old
+        }
+    };
+    let m = scene.add_material(material);
+    scene.assign_material(id, m).map_err(|e| e.to_string())
+}
+
+fn bake_detail(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let id = object_id(args, "id")?;
+    let source = object_id(args, "source")?;
+    if id == source {
+        return Err("`source` must be a different, denser object".into());
+    }
+    let resolution = args
+        .get("resolution")
+        .and_then(Value::as_u64)
+        .unwrap_or(1024) as u32;
+    if ![512, 1024, 2048].contains(&resolution) {
+        return Err("`resolution` must be 512, 1024 or 2048".into());
+    }
+    let low = scene.object(id).map_err(|e| e.to_string())?;
+    let src = scene.object(source).map_err(|e| e.to_string())?;
+    // The source, moved into the light object's own space.
+    let to_local = low.transform.matrix().inverse() * src.transform.matrix();
+    let high = src.mesh.transformed(&to_local);
+    let mut mesh = low.mesh.clone();
+    if !mesh.has_uvs() {
+        uv::unwrap(&mut mesh, &UnwrapOptions::default())?;
+    }
+    let maps = detail_bake::bake_detail(
+        &mesh,
+        &high,
+        BakeOptions {
+            size: resolution,
+            max_distance: args
+                .get("distance")
+                .and_then(Value::as_f64)
+                .map(|d| d as f32),
+            ..Default::default()
+        },
+    )?;
+    scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
+    scene.object_mut(id).map_err(|e| e.to_string())?.detail = Some(Arc::new(maps));
+    rebake_material(scene, id, resolution)?;
+    Ok(
+        json!({ "id": id, "source": source, "resolution": resolution,
+        "note": "Detail baked. You can hide or delete the source object now." }),
+    )
+}
+
+fn make_game_ready(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let id = object_id(args, "id")?;
+    apply_object_scale(scene, id)?;
+    let resolution = args
+        .get("resolution")
+        .and_then(Value::as_u64)
+        .unwrap_or(1024) as u32;
+    if ![512, 1024, 2048].contains(&resolution) {
+        return Err("`resolution` must be 512, 1024 or 2048".into());
+    }
+    let obj = scene.object(id).map_err(|e| e.to_string())?;
+    let high = obj.mesh.clone();
+    let before = tri_count(&high);
+    let target = args
+        .get("triangles")
+        .and_then(Value::as_u64)
+        .map(|t| t as usize)
+        .unwrap_or((before / 5).clamp(500, 20_000));
+    if target >= before {
+        return Err(format!(
+            "the object already has {before} triangles; give a smaller `triangles`"
+        ));
+    }
+    let lod_ratios: Vec<f64> = match args.get("lods").and_then(Value::as_array) {
+        Some(a) => a
+            .iter()
+            .filter_map(Value::as_f64)
+            .filter(|r| *r > 0.0 && *r < 1.0)
+            .collect(),
+        None => vec![0.5, 0.25],
+    };
+    let mut low = simplify(&high, target)?;
+    uv::unwrap(&mut low, &UnwrapOptions::default())?;
+    let maps = detail_bake::bake_detail(
+        &low,
+        &high,
+        BakeOptions {
+            size: resolution,
+            ..Default::default()
+        },
+    )?;
+    let mut lods = Vec::new();
+    for r in &lod_ratios {
+        lods.push(simplify(&low, (target as f64 * r) as usize)?);
+    }
+    let lod_tris: Vec<usize> = lods.iter().map(tri_count).collect();
+    let after = tri_count(&low);
+    scene.set_mesh(id, low).map_err(|e| e.to_string())?;
+    let o = scene.object_mut(id).map_err(|e| e.to_string())?;
+    o.detail = Some(Arc::new(maps));
+    o.lods = lods;
+    rebake_material(scene, id, resolution)?;
+    Ok(json!({
+        "id": id,
+        "triangles_before": before,
+        "triangles": after,
+        "lod_triangles": lod_tris,
+        "resolution": resolution,
+        "note": "Detail is now in the normal and occlusion maps. Render a close-up to check it, and export_glb: LODs export as _LOD1, _LOD2 children. Undo restores the dense mesh."
+    }))
+}
+
 /// Problems a reviewer would spot, each with the fix.
 fn check_asset(scene: &Scene) -> Value {
     let mut issues: Vec<Value> = Vec::new();
@@ -1716,7 +1959,7 @@ fn apply_smart_material(scene: &mut Scene, args: &Value) -> Result<Value, String
         uv::unwrap(&mut mesh, &UnwrapOptions::default())?;
         unwrapped = true;
     }
-    let baked = smart::bake(&mesh, &sm, resolution)?;
+    let baked = smart::bake_with_detail(&mesh, &sm, resolution, obj.detail.as_deref())?;
     let material_name = format!("{} ({})", obj.name, preset.name());
     scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
     let material = scene.add_material(Material {
@@ -1731,6 +1974,10 @@ fn apply_smart_material(scene: &mut Scene, args: &Value) -> Result<Value, String
             metallic_roughness: baked.metallic_roughness,
             normal: baked.normal,
         })),
+        smart: Some(SmartSource {
+            material: sm.clone(),
+            resolution,
+        }),
         ..Default::default()
     });
     scene

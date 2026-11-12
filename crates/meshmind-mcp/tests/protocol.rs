@@ -775,3 +775,145 @@ fn character_body_sculpt_and_rebuild() {
     );
     assert_eq!(r["isError"], false, "{r}");
 }
+
+#[test]
+fn make_game_ready_bakes_detail_and_exports_lods() {
+    let mut s = Server::new();
+    let id = create(&mut s, json!({ "shape": "sphere", "name": "Rock" }));
+    call(&mut s, "subdivide", json!({ "id": id, "levels": 2 }));
+    call(
+        &mut s,
+        "sculpt",
+        json!({ "id": id, "brush": "crease", "radius": 0.15, "strength": 0.05,
+        "points": [[-0.5, 0.5, 0.5], [0.5, 0.5, 0.5]], "symmetric": false }),
+    );
+    let r = call(
+        &mut s,
+        "make_game_ready",
+        json!({ "id": id, "triangles": 600, "resolution": 512 }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let c = &r["structuredContent"];
+    let before = c["triangles_before"].as_u64().unwrap();
+    let after = c["triangles"].as_u64().unwrap();
+    assert!(after <= 600 && after < before, "{c}");
+    let lods: Vec<u64> = c["lod_triangles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    assert_eq!(lods.len(), 2);
+    assert!(lods[0] < after && lods[1] < lods[0], "{lods:?}");
+
+    let obj = call(&mut s, "get_object", json!({ "id": id, "max_faces": 0 }))["structuredContent"]
+        .clone();
+    assert_eq!(obj["closed"], true, "{obj}");
+
+    // LODs export as children of one node.
+    let path = std::env::temp_dir().join(format!("meshmind-lod-{}.glb", std::process::id()));
+    let r = call(
+        &mut s,
+        "export_glb",
+        json!({ "path": path.to_str().unwrap() }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let gltf: Value = serde_json::from_slice(&bytes[20..20 + len]).unwrap();
+    let names: Vec<&str> = gltf["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|n| n["name"].as_str())
+        .collect();
+    for n in ["Rock", "Rock_LOD0", "Rock_LOD1", "Rock_LOD2"] {
+        assert!(names.contains(&n), "{names:?}");
+    }
+    // The material carries the baked normal map and occlusion.
+    let mat = gltf["materials"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert!(
+        mat["normalTexture"].is_object() && mat["occlusionTexture"].is_object(),
+        "{mat}"
+    );
+
+    // Undo brings back the dense mesh.
+    call(&mut s, "undo", json!({}));
+    let obj = call(&mut s, "get_object", json!({ "id": id, "max_faces": 0 }))["structuredContent"]
+        .clone();
+    assert!(obj["faces"].as_u64().unwrap() * 2 >= before, "{obj}");
+}
+
+#[test]
+fn decimate_keeps_a_closed_mesh() {
+    let mut s = Server::new();
+    let id = create(&mut s, json!({ "shape": "sphere" }));
+    call(&mut s, "subdivide", json!({ "id": id, "levels": 2 }));
+    let r = call(&mut s, "decimate", json!({ "id": id, "ratio": 0.25 }));
+    assert_eq!(r["isError"], false, "{r}");
+    let obj = call(&mut s, "get_object", json!({ "id": id, "max_faces": 0 }))["structuredContent"]
+        .clone();
+    assert_eq!(obj["closed"], true, "{obj}");
+}
+
+#[test]
+fn compare_to_reference_measures_the_silhouette() {
+    use meshmind_core::texture::Texture;
+    let mut s = Server::new();
+    let r = call(&mut s, "compare_to_reference", json!({}));
+    assert_eq!(r["isError"], true, "needs a reference first");
+
+    // Concept art: a dark upright box on white, twice as tall as wide.
+    let mut img = Texture::new("ref", 200, 200);
+    for y in 0..200 {
+        for x in 0..200 {
+            let inside = (75..125).contains(&x) && (50..150).contains(&y);
+            img.set(
+                x,
+                y,
+                if inside {
+                    [60, 40, 30, 255]
+                } else {
+                    [255, 255, 255, 255]
+                },
+            );
+        }
+    }
+    let path = std::env::temp_dir().join(format!("meshmind-ref-{}.png", std::process::id()));
+    std::fs::write(&path, img.to_png()).unwrap();
+    let r = call(
+        &mut s,
+        "set_reference",
+        json!({ "path": path.to_str().unwrap(), "view": "front" }),
+    );
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(r["isError"], false, "{r}");
+
+    // A cube is as wide as it is tall: the comparison should say so.
+    create(&mut s, json!({ "shape": "cube" }));
+    let r = call(&mut s, "compare_to_reference", json!({ "size": 192 }));
+    assert_eq!(r["isError"], false, "{r}");
+    let c = &r["structuredContent"];
+    assert_eq!(c["subject_found"], true);
+    let ref_aspect = c["width_to_height"]["reference"].as_f64().unwrap();
+    assert!((ref_aspect - 0.5).abs() < 0.05, "{c}");
+    assert!(
+        c["differences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|d| d.as_str().unwrap().starts_with("Too wide")),
+        "{c}"
+    );
+    assert!(r["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["type"] == "image"));
+}

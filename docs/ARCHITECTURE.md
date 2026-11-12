@@ -142,8 +142,13 @@ after every change and restores the last session at startup.
 - Glass in the preview is approximate: one refraction offset per surface,
   no caustics or total internal reflection.
 - Image-to-3D plugins are not built yet.
-- Sculpted bodies are dense (tens of thousands of quads) and unrigged;
-  rebuilding a body from its parts discards sculpt strokes.
+- Sculpted bodies are unrigged, and rebuilding a body from its parts
+  discards sculpt strokes.
+- `make_game_ready` re-unwraps the reduced mesh with the planar unwrapper,
+  so organic shapes get many small UV islands.
+- `compare_to_reference` separates the subject from the background by
+  colour, so busy backgrounds and cast shadows in the reference skew the
+  width measurements.
 
 ## Roadmap
 
@@ -159,8 +164,9 @@ after every change and restores the last session at startup.
    gallery.
 
 5. **Characters** (in progress): blended-volume bodies, sculpt brushes,
-   character starters with landmarks, skin material.
+   character starters with landmarks, skin material, polygon reduction with
+   normal and occlusion baking and LODs (`make_game_ready`), and reference
+   image comparison.
 
-Next ideas: reducing polygon counts and baking sculpted detail into normal
-maps, rigging, image-to-3D plugins (bring a concept image, get a starting
-mesh), LODs and collision meshes for game engines.
+Next ideas: rigging, image-to-3D plugins (bring a concept image, get a
+starting mesh), collision meshes for game engines.

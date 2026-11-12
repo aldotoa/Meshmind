@@ -4,6 +4,7 @@
 //! [`http`] serves it over Streamable HTTP; `main.rs` also offers stdio.
 
 pub mod http;
+mod reference;
 mod tools;
 
 use base64::Engine;
@@ -16,7 +17,9 @@ const MAX_UNDO: usize = 100;
 const INSTRUCTIONS: &str = "MeshMind is a 3D modelling engine you drive with tools. Units are metres, Y is up, \
 the ground is y = 0, and objects are created centred on the origin. Aim for game-ready, AAA-looking assets. \
 Work like a professional 3D artist:\n\
-1. Plan: decide the real-world size in metres and list the parts (a sword: blade, guard, grip, wrap, ferrules, \
+1. Plan: if the user has concept art, a sketch or a photo, ask for the file and load it with set_reference \
+(one per view: front, left, three_quarter); it is the target you measure against all the way through. \
+Decide the real-world size in metres and list the parts (a sword: blade, guard, grip, wrap, ferrules, \
 pommel). Real objects are made of many separate parts; one object per part.\n\
 2. Block out: build each part with the shape tool that matches its silhouette, place it with set_transform, \
 and check proportions with render_preview before adding detail. Boxes and plain cylinders look like \
@@ -57,12 +60,19 @@ and gemstone (see-through; color tints them). Pick colours with color_hex and ke
 0.2 to 0.4 for used items, higher only for battered ones. Use set_material only for flat colours, glowing \
 parts (emissive) or custom glass (transmission, ior).\n\
 6. Review like an art director: render_preview from several views under at least two lighting presets, use \
-`focus` for close-ups of small parts, and call check_asset. Fix floating or intersecting parts, wrong \
-proportions, grey parts and stale materials, then look again.\n\
-7. Deliver: export_glb for game engines, and save_project so the work can be continued later.\n\
+`focus` for close-ups of small parts, and call check_asset. With a reference, call compare_to_reference after \
+every round: it shows the reference, the model and the model's outline over the reference, and lists where \
+the model is too wide or too narrow. Fix silhouette and proportions first, then missing parts, then surface \
+detail. Fix floating or intersecting parts, grey parts and stale materials, then look again.\n\
+7. Game-ready: sculpted and subdivided meshes are far too dense for a game. As the last shape step, call \
+make_game_ready on each dense object with a triangle budget (hero character 15000 to 40000, enemy 5000 to \
+15000, weapon 1500 to 5000, small prop 300 to 1500): it reduces the mesh, bakes the lost detail into normal \
+and occlusion maps, re-applies the smart material and adds LODs. Then render a close-up to check it.\n\
+8. Deliver: export_glb for game engines, and save_project so the work can be continued later.\n\
 Common mistakes: everything built from cubes and cylinders; one object for the whole model; parts hovering \
 just off each other; the model not standing on y = 0; skipping bevels; wear or dirt at 1.0 on everything; \
-editing shape after materials without re-applying them. Every change can be undone. Prompts model_asset, \
+editing shape after materials without re-applying them; delivering a 200000-triangle sculpt instead of \
+calling make_game_ready. Every change can be undone. Prompts model_asset, \
 refine_asset and review_asset describe these workflows, and docs/RECIPES.md in the MeshMind repository shows \
 worked examples (sword, axe, barrel, potion bottle, orc warrior).";
 
@@ -125,7 +135,8 @@ fn get_prompt(params: &Value) -> Result<Value, (i64, String)> {
             format!(
                 "Using the MeshMind tools, model this game asset: {description}\n{style}\n\n\
                  Work like a professional 3D artist:\n\
-                 1. Decide the real-world size in metres and list the parts. Start with clear_scene.\n\
+                 1. Decide the real-world size in metres and list the parts. Start with clear_scene. If \
+                 there is concept art or a reference image, load it with set_reference first.\n\
                  If it is a character or creature, start the body with create_character (humanoids) or \
                  sculpt_body (other creatures), shape it with sculpt_body edit_parts and sculpt brushes, \
                  and add gear as separate parts placed at the returned landmarks. Never build a body from \
@@ -139,8 +150,11 @@ fn get_prompt(params: &Value) -> Result<Value, (i64, String)> {
                  4. Bevel hard edges slightly (2-3 segments) so they catch light.\n\
                  5. apply_smart_material on every part with a fitting preset and colour.\n\
                  6. Review: render_preview under at least two lighting presets, close-ups of small parts \
-                 with `focus`, and check_asset. Fix everything it finds and look again.\n\
-                 7. export_glb to {output} and save_project next to it (same name, .meshmind).\n\
+                 with `focus`, check_asset, and compare_to_reference if you loaded one. Fix everything \
+                 they find and look again.\n\
+                 7. Call make_game_ready on every sculpted or subdivided object with a triangle budget \
+                 that fits the asset, and check a close-up.\n\
+                 8. export_glb to {output} and save_project next to it (same name, .meshmind).\n\
                  Finish with a short summary of what you built, its size and triangle count."
             )
         }
@@ -159,12 +173,17 @@ fn get_prompt(params: &Value) -> Result<Value, (i64, String)> {
                 .map(|f| format!(" Look hardest at {f}."))
                 .unwrap_or_default();
             format!(
-                "Using the MeshMind tools, review the current model like an art director and bring it up                  to AAA quality.{focus}
-
-                 1. Call list_objects, check_asset, and render_preview from the front, the side and                  three_quarter under studio and outdoor lighting, plus close-ups of small parts with `focus`.
-                 2. Write a short critique: silhouette (is it recognisable at a glance?), proportions against                  the real object, detail density (are there enough separate parts and trim?), edges (bevelled?),                  materials (right preset, believable colour, wear and dirt?), and anything floating,                  intersecting or grey.
-                 3. Fix the three most important problems, re-applying materials to any part you reshape.
-                 4. Render again and compare. Use undo if a change made things worse.
+                "Using the MeshMind tools, review the current model like an art director and bring it up \
+                 to AAA quality.{focus}\n\n\
+                 1. Call list_objects, check_asset, and render_preview from the front, the side and \
+                 three_quarter under studio and outdoor lighting, plus close-ups of small parts with `focus`. \
+                 If a reference image is loaded, call compare_to_reference too.\n\
+                 2. Write a short critique: silhouette (is it recognisable at a glance? does it match the \
+                 reference?), proportions against the real object, detail density (are there enough separate \
+                 parts and trim?), edges (bevelled?), materials (right preset, believable colour, wear and \
+                 dirt?), triangle count against a game budget, and anything floating, intersecting or grey.\n\
+                 3. Fix the three most important problems, re-applying materials to any part you reshape.\n\
+                 4. Render again and compare. Use undo if a change made things worse.\n\
                  Finish with what you changed and what you would improve next."
             )
         }

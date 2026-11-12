@@ -192,6 +192,18 @@ struct Edge {
 
 /// Bake `mat` for `mesh` (which must have UVs) at `size` × `size` pixels.
 pub fn bake(mesh: &PolyMesh, mat: &SmartMaterial, size: u32) -> Result<Baked, String> {
+    bake_with_detail(mesh, mat, size, None)
+}
+
+/// Like [`bake`], layering detail baked from a denser mesh underneath: its
+/// normal map is combined with the material's own bumps, and its ambient
+/// occlusion goes into the occlusion channel and darkens creases a little.
+pub fn bake_with_detail(
+    mesh: &PolyMesh,
+    mat: &SmartMaterial,
+    size: u32,
+    detail: Option<&crate::bake::DetailMaps>,
+) -> Result<Baked, String> {
     if !mesh.has_uvs() {
         return Err("the mesh has no UVs; unwrap it first".into());
     }
@@ -273,8 +285,16 @@ pub fn bake(mesh: &PolyMesh, mat: &SmartMaterial, size: u32) -> Result<Baked, St
     let mut base = Texture::new("base_color", size, size);
     let mut mr = Texture::new("metallic_roughness", size, size);
     let mut normal = Texture::new("normal", size, size);
+    // Texels no island reaches take the average, so filtering and mip
+    // maps never pull in a colour the material doesn't have.
+    let filled: Vec<&Surface> = surf.iter().flatten().collect();
+    let mean = filled.iter().fold(Vec3::ZERO, |a, s| a + s.color) / filled.len().max(1) as f32;
     let fallback = Surface {
-        color: Vec3::splat(0.5),
+        color: if filled.is_empty() {
+            Vec3::splat(0.5)
+        } else {
+            mean
+        },
         metallic: 0.0,
         roughness: 0.5,
         height: 0.5,
@@ -289,7 +309,19 @@ pub fn bake(mesh: &PolyMesh, mat: &SmartMaterial, size: u32) -> Result<Baked, St
     for y in 0..n {
         for x in 0..n {
             let s = surf[y * n + x].unwrap_or(fallback);
-            let c = s.color.clamp(Vec3::ZERO, Vec3::ONE);
+            let uv = Vec2::new((x as f32 + 0.5) / n as f32, (y as f32 + 0.5) / n as f32);
+            let (dn, ao) = match detail {
+                Some(d) => {
+                    let t = d.normal.sample(uv);
+                    (
+                        Vec3::new(t.x * 2.0 - 1.0, t.y * 2.0 - 1.0, t.z * 2.0 - 1.0),
+                        d.occlusion.sample(uv).x,
+                    )
+                }
+                None => (Vec3::Z, 1.0),
+            };
+            // Cavities collect a little grime and shade: fold some AO into colour.
+            let c = (s.color * (0.55 + 0.45 * ao)).clamp(Vec3::ZERO, Vec3::ONE);
             base.set(
                 x as u32,
                 y as u32,
@@ -303,13 +335,15 @@ pub fn bake(mesh: &PolyMesh, mat: &SmartMaterial, size: u32) -> Result<Baked, St
             mr.set(
                 x as u32,
                 y as u32,
-                [255, to_u8(s.roughness), to_u8(s.metallic), 255],
+                [to_u8(ao), to_u8(s.roughness), to_u8(s.metallic), 255],
             );
             let dx = height_at(x + 1, y) - height_at(x.saturating_sub(1), y);
             let dy = height_at(x, y + 1) - height_at(x, y.saturating_sub(1));
             // glTF uses the OpenGL convention: green points to the top of the
             // image, i.e. towards smaller rows, so the y slope changes sign.
             let nm = Vec3::new(-dx * bump, dy * bump, 1.0).normalize();
+            // Whiteout blend: the material's bumps ride on the baked detail.
+            let nm = Vec3::new(dn.x + nm.x, dn.y + nm.y, dn.z * nm.z).normalize_or(Vec3::Z);
             normal.set(
                 x as u32,
                 y as u32,
@@ -724,6 +758,7 @@ fn raster(uv: [Vec2; 3], n: usize, mut f: impl FnMut(usize, usize, [f32; 3])) {
         .max(uv[2])
         .ceil()
         .min(Vec2::splat(n as f32 - 1.0));
+    let mut any = false;
     for y in lo.y as usize..=hi.y as usize {
         for x in lo.x as usize..=hi.x as usize {
             let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
@@ -732,7 +767,16 @@ fn raster(uv: [Vec2; 3], n: usize, mut f: impl FnMut(usize, usize, [f32; 3])) {
             let w2 = 1.0 - w0 - w1;
             if w0 >= -1e-4 && w1 >= -1e-4 && w2 >= -1e-4 {
                 f(x, y, [w0, w1, w2]);
+                any = true;
             }
+        }
+    }
+    // A sliver that covers no texel centre still gets the texel under its
+    // middle, so tiny UV islands never show the empty background.
+    if !any {
+        let c = (uv[0] + uv[1] + uv[2]) / 3.0;
+        if c.x >= 0.0 && c.y >= 0.0 && c.x < n as f32 && c.y < n as f32 {
+            f(c.x as usize, c.y as usize, [1.0 / 3.0; 3]);
         }
     }
 }

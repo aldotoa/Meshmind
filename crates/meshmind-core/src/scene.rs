@@ -42,6 +42,14 @@ pub struct Object {
     /// the parts, so the body can be adjusted and rebuilt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Vec<crate::sdf::SdfPart>>,
+    /// Detail baked from a denser mesh (normal map and ambient occlusion),
+    /// laid out on this mesh's UVs. Cleared when the mesh changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<std::sync::Arc<crate::bake::DetailMaps>>,
+    /// Lighter versions for distant views (LOD1, LOD2, ...), sharing this
+    /// mesh's UVs and material. Exported as `<name>_LOD1` and so on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lods: Vec<PolyMesh>,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -64,6 +72,9 @@ pub struct Scene {
     /// How the scene is lit in previews and the viewer.
     #[serde(default)]
     pub lighting: LightingPreset,
+    /// Reference images (concept art) to compare the model against.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<crate::reference::Reference>,
 }
 
 impl Default for Scene {
@@ -74,6 +85,7 @@ impl Default for Scene {
             next_object_id: 1,
             next_material_id: 1,
             lighting: LightingPreset::default(),
+            references: Vec::new(),
         }
     }
 }
@@ -119,6 +131,8 @@ impl Scene {
             mesh,
             material: Self::DEFAULT_MATERIAL,
             body: None,
+            detail: None,
+            lods: Vec::new(),
         });
         Ok(id)
     }
@@ -126,7 +140,13 @@ impl Scene {
     /// Replace an object's mesh, e.g. with the result of a modelling operation.
     pub fn set_mesh(&mut self, id: ObjectId, mesh: PolyMesh) -> Result<(), SceneError> {
         mesh.validate().map_err(SceneError::InvalidMesh)?;
-        self.object_mut(id)?.mesh = mesh;
+        let obj = self.object_mut(id)?;
+        if obj.mesh != mesh {
+            // Baked detail and LODs belong to the old shape.
+            obj.detail = None;
+            obj.lods.clear();
+        }
+        obj.mesh = mesh;
         Ok(())
     }
 

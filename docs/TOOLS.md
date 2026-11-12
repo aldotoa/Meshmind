@@ -148,6 +148,38 @@ Sculpt a dense organic surface (from sculpt_body or create_character, or after s
 | `strength` | number | Metres for inflate, crease and noise; 0 to 1 for pinch, smooth and flatten. Default 0.5 for those, 0.01 for the others. |
 | `symmetric` | boolean | Also apply mirrored across x = 0. Default true. |
 
+## `make_game_ready`
+
+The last modelling step for a dense or sculpted object (characters, creatures, sculpted props, anything over a few thousand triangles): reduce it to a game budget, bake every sculpted crease and bump into a normal map plus ambient occlusion, re-apply its smart material on top, and build LODs (lighter copies for distance, exported as _LOD1, _LOD2). It looks almost the same up close at a fraction of the triangles. Do it after the shape and materials are final; undo restores the dense version.
+
+| Argument | Type | Description |
+|---|---|---|
+| `id` (required) | integer | Object id. |
+| `lods` | array of number | Fractions of `triangles` for each LOD. Default [0.5, 0.25]; [] for none. |
+| `resolution` | one of  | Texture size. Default 1024 (2048 for hero assets). |
+| `triangles` | integer | Target triangle count. Default: a fifth of the current count, between 500 and 20000. Typical budgets: hero character 15000 to 40000, enemy 5000 to 15000, weapon 1500 to 5000, small prop 300 to 1500. |
+
+## `decimate`
+
+Reduce an object's triangle count while keeping its shape (quadric edge collapse). make_game_ready does this plus baking, so prefer it; use decimate for quick low-poly versions. Clears UVs and baked textures.
+
+| Argument | Type | Description |
+|---|---|---|
+| `id` (required) | integer | Object id. |
+| `ratio` | number | Or a fraction of the current count, e.g. 0.25. |
+| `triangles` | integer | Target triangle count. |
+
+## `bake_detail`
+
+Bake the surface detail of a dense object (`source`) onto a lighter object (`id`) that covers the same shape, as a normal map and ambient occlusion, then re-apply the light object's material on top. For hand-made low-poly versions; make_game_ready does the whole job in one step.
+
+| Argument | Type | Description |
+|---|---|---|
+| `distance` | number | How far apart the two surfaces may be, in metres. Default 2% of the object's size. |
+| `id` (required) | integer | Object id. |
+| `resolution` | one of  |  |
+| `source` (required) | integer | The dense, detailed object. |
+
 ## `list_objects`
 
 List all objects with id, name, transform, world-space size and bounding box, face count and material.
@@ -336,6 +368,25 @@ Render the scene and return an image so you can check your work. Use it after ev
 | `focus_radius` | number | With focus_point: how much to show around it, in metres. Default 0.3. |
 | `size` | integer | Pixels per view, 128 to 1024. Default 384. |
 | `views` | array of string |  |
+
+## `set_reference`
+
+Load a reference image (concept art, a photo, a sketch: PNG or JPEG file) to model from. Ask the user for one whenever they describe something specific, and work from it: AAA models match their reference. `view` says which camera angle it shows. Loading another with the same name replaces it.
+
+| Argument | Type | Description |
+|---|---|---|
+| `name` | string | Label, e.g. "front sketch". Defaults to the view. |
+| `path` (required) | string | PNG or JPEG file path. |
+| `view` | one of `front`, `back`, `left`, `right`, `three_quarter` | The angle the image shows. Default front. |
+
+## `compare_to_reference`
+
+Render the model from the reference's angle next to the reference, plus the model's outline drawn over the reference (matched by height), and measure where the silhouette is too wide or too narrow. Use it after blocking out and after every round of changes: fix silhouette and proportions first, then missing parts, then detail and materials.
+
+| Argument | Type | Description |
+|---|---|---|
+| `name` | string | Which reference. Default: the latest. |
+| `size` | integer | Panel height in pixels, 192 to 768. Default 448. |
 
 ## `export_glb`
 
