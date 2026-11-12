@@ -38,6 +38,10 @@ pub struct Object {
     pub transform: Transform,
     pub mesh: PolyMesh,
     pub material: MaterialId,
+    /// For objects made from blended volumes (sculpt_body, create_character):
+    /// the parts, so the body can be adjusted and rebuilt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<Vec<crate::sdf::SdfPart>>,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -114,6 +118,7 @@ impl Scene {
             transform: Transform::default(),
             mesh,
             material: Self::DEFAULT_MATERIAL,
+            body: None,
         });
         Ok(id)
     }

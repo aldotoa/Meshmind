@@ -3,13 +3,16 @@
 use glam::{EulerRot, Quat, Vec3};
 use std::sync::Arc;
 
+use meshmind_core::character::{self, CharacterParams};
+use meshmind_core::sculpt::{self as brushes, Brush, Stroke};
+use meshmind_core::sdf::{self, MeshOptions, SdfPart};
 use meshmind_core::smart::{self, Preset, SmartMaterial};
 use meshmind_core::uv::{self, UnwrapOptions};
 use meshmind_core::{
     csg, deform, export, ops, shapes, Axis, BooleanOp, LightingPreset, Material, MaterialTextures,
     Primitive, Scene, Selection,
 };
-use meshmind_render::{render_sheet_focused, View};
+use meshmind_render::{render_sheet_framed, View};
 use serde_json::{json, Value};
 
 /// What a tool returns: structured data, plus an optional PNG image.
@@ -63,6 +66,30 @@ fn faces_schema() -> Value {
 
 fn id_prop() -> Value {
     json!({ "type": "integer", "description": "Object id." })
+}
+
+fn part_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "One volume. ellipsoid: center + radii [x, y, z]. capsule: a, b (end points) + radius_a, radius_b (tapers; 0 at b makes a point, e.g. horns, tusks, claws). box: center + size [x, y, z] + rounding. rotation: Euler degrees for ellipsoids and boxes.",
+        "properties": {
+            "name": { "type": "string", "description": "Label, e.g. \"left upper arm\" (needed to edit it later)." },
+            "shape": { "type": "string", "enum": ["ellipsoid", "capsule", "box"] },
+            "center": { "type": "array", "items": { "type": "number" } },
+            "radii": { "type": "array", "items": { "type": "number" } },
+            "a": { "type": "array", "items": { "type": "number" } },
+            "b": { "type": "array", "items": { "type": "number" } },
+            "radius_a": { "type": "number" },
+            "radius_b": { "type": "number" },
+            "size": { "type": "array", "items": { "type": "number" } },
+            "rounding": { "type": "number" },
+            "rotation": { "type": "array", "items": { "type": "number" } },
+            "op": { "type": "string", "enum": ["add", "subtract"] },
+            "blend": { "type": "number", "description": "Metres of smooth blending into earlier parts. Default 0.03." },
+            "mirror": { "type": "boolean", "description": "Also add a copy mirrored across x = 0." }
+        },
+        "required": ["shape"]
+    })
 }
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
@@ -167,6 +194,72 @@ pub fn definitions() -> Value {
                     "scale": vec3_schema("Scale around the box centre, e.g. [1.5, 1, 1.5]."),
                     "falloff": { "type": "number", "description": "Width of the soft blend around the box in metres. Default 0." } }),
             &["id", "min", "max"]),
+        tool("create_character",
+            "Start a character from a ready-made body with believable anatomy: one smooth, \
+             watertight surface (no visible joins) with head, face (brow, eye sockets, nose, lips, \
+             ears), neck, muscles, arms, five-fingered hands, legs and feet, plus eyeballs as separate \
+             objects. ALWAYS start humanoids and creatures here instead of stacking primitives. \
+             Returns the body id, eye ids and `landmarks` (world points such as left_hand_grip, \
+             waist, head_top, left_lower_canine) to place weapons, belts, armour, tusks and hair. \
+             Then reshape with sculpt_body (edit_parts by name) and sculpt, and add clothing, armour \
+             and props as separate objects. Faces +Z; the character's left is +X; feet on y = 0.",
+            json!({ "species": { "type": "string", "enum": character::Species::ALL.map(|s| s.name()),
+                        "description": "Sets proportions: human (7.5 heads tall), orc (broad, hunched, heavy jaw, pointed ears), goblin (small, big head, long ears and nose, pot belly), dwarf (short, wide, barrel chest), troll (huge, long arms, stooped). Default human." },
+                    "name": { "type": "string" },
+                    "height": { "type": "number", "description": "Standing height in metres. Defaults to the species' (human 1.8, orc 2.05, goblin 1.0, dwarf 1.35, troll 2.8)." },
+                    "feminine": { "type": "boolean", "description": "Narrower shoulders and waist, wider hips, breasts, finer jaw." },
+                    "bulk": { "type": "number", "minimum": 0, "maximum": 1, "description": "0 lean, 0.5 average, 1 massive. Defaults to the species'." },
+                    "gut": { "type": "number", "minimum": 0, "maximum": 1, "description": "Belly size, 0 flat to 1 big." },
+                    "hunch": { "type": "number", "minimum": 0, "maximum": 1, "description": "0 upright to 1 stooped." },
+                    "jaw": { "type": "number", "minimum": 0, "maximum": 1, "description": "0 small jaw to 1 heavy jaw with underbite." },
+                    "head_size": { "type": "number", "description": "Head size multiplier, 1 normal. Stylized characters often use 1.2 to 1.5." },
+                    "arm_length": { "type": "number", "description": "Arm length multiplier, 1 normal." },
+                    "leg_length": { "type": "number", "description": "Leg length multiplier, 1 normal." },
+                    "ears": { "type": "string", "enum": ["round", "pointed", "long"] },
+                    "pose": { "type": "string", "enum": ["relaxed", "a_pose"], "description": "relaxed (arms near the body, default) or a_pose (arms 45 degrees out, for rigging)." },
+                    "detail": { "type": "string", "enum": ["low", "medium", "high"], "description": "Mesh density. Default medium." } }),
+            &[]),
+        tool("sculpt_body",
+            "Model organic shapes as clay: overlapping volumes (ellipsoids, tapered capsules, rounded \
+             boxes) melted together into ONE smooth, watertight surface. Use it for creatures, \
+             monsters, animals, tentacles, rocks, roots, food and any organic form, never a pile of \
+             separate primitives. `blend` (metres) is how much a part melts into the parts before it: \
+             0.01 to 0.03 for tight joins, 0.05 to 0.15 for soft fleshy transitions. op \"subtract\" \
+             carves (eye sockets, mouths, grooves). `mirror` adds a copy across x = 0 (build \
+             symmetric things centred on x = 0, facing +Z). Pass `id` to rebuild an existing body: \
+             `edit_parts` changes named parts (only the fields given), `add_parts` and \
+             `remove_parts` add or drop parts. Rebuilding discards sculpt strokes, so settle the \
+             big forms first.",
+            json!({ "name": { "type": "string" },
+                    "id": { "type": "integer", "description": "Rebuild this body (from sculpt_body or create_character) instead of creating a new object." },
+                    "parts": { "type": "array", "items": part_schema(), "description": "The full list of parts, in order. Replaces the body's parts when `id` is given." },
+                    "add_parts": { "type": "array", "items": part_schema(), "description": "Parts to append to the body named by `id`." },
+                    "edit_parts": { "type": "array", "items": { "type": "object" },
+                        "description": "Changes to existing parts, matched by `name`, e.g. [{\"name\": \"ear\", \"radii\": [0.02, 0.06, 0.2]}, {\"name\": \"belly\", \"center\": [0, 1.0, 0.2]}]. Only the fields given change." },
+                    "remove_parts": { "type": "array", "items": { "type": "string" }, "description": "Names of parts to drop." },
+                    "detail": { "type": "string", "enum": ["low", "medium", "high"], "description": "Mesh density. Default medium. Thin parts (fingers) automatically get finer detail." } }),
+            &[]),
+        tool("sculpt",
+            "Sculpt a dense organic surface (from sculpt_body or create_character, or after \
+             subdivide) with a brush along a stroke, like ZBrush. Every vertex within `radius` of \
+             the stroke moves, fading smoothly to the edge. Mirrored across the object's x = 0 by \
+             default. Brushes: inflate (push out by `strength` metres, negative pushes in: muscles, \
+             cheekbones, knuckles, veins with a small radius), crease (groove `strength` metres deep: \
+             wrinkles, eyelids, lips, muscle separations, scars), pinch (0 to 1: sharpen a ridge such \
+             as a jaw line), smooth (0 to 1), flatten (0 to 1: facial planes, worn areas), grab \
+             (move by `offset`: pull out an ear, nose or chin), noise (lumps `strength` metres high \
+             and `scale` metres across: warts, rough hide, rock). Points are world coordinates on \
+             the surface; use create_character landmarks or get_object bounds to find them.",
+            json!({ "id": id_prop(),
+                    "brush": { "type": "string", "enum": ["inflate", "crease", "pinch", "smooth", "flatten", "grab", "noise"] },
+                    "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 },
+                        "description": "Stroke path as [x, y, z] world points (one point is a single dab). Omit to affect the whole object (inflate, smooth and noise only)." },
+                    "radius": { "type": "number", "description": "Brush radius in metres." },
+                    "strength": { "type": "number", "description": "Metres for inflate, crease and noise; 0 to 1 for pinch, smooth and flatten. Default 0.5 for those, 0.01 for the others." },
+                    "offset": vec3_schema("grab only: how far to drag, [x, y, z] metres."),
+                    "scale": { "type": "number", "description": "noise only: bump size in metres. Default radius / 4." },
+                    "symmetric": { "type": "boolean", "description": "Also apply mirrored across x = 0. Default true." } }),
+            &["id", "brush", "radius"]),
         tool("list_objects",
             "List all objects with id, name, transform, world-space size and bounding box, face count and material.",
             json!({}), &[]),
@@ -180,7 +273,8 @@ pub fn definitions() -> Value {
         tool("get_object",
             "Details of one object, including each face's index, centre and normal (local space), \
              so you can pick faces by index for extrude/inset.",
-            json!({ "id": id_prop(), "max_faces": { "type": "integer", "description": "Limit on faces listed. Default 100." } }),
+            json!({ "id": id_prop(), "max_faces": { "type": "integer", "description": "Limit on faces listed. Default 100." },
+                    "parts": { "type": "boolean", "description": "For bodies from sculpt_body or create_character: list every part in full (shape, position, size) instead of just names." } }),
             &["id"]),
         tool("set_transform",
             "Move, rotate or scale an object. Omitted fields keep their value. Rotation is Euler \
@@ -274,7 +368,7 @@ pub fn definitions() -> Value {
              follows them.",
             json!({ "id": id_prop(),
                     "preset": { "type": "string", "enum": Preset::ALL.map(|p| p.name()),
-                        "description": "painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass via color), bronze (green verdigris patina in creases), leather (grips, straps, belts), fabric (woven cloth: banners, sacks, upholstery), ceramic (glazed pottery, tiles; chips show clay), bone (also ivory, horn), glass (clear and see-through; color tints it), gemstone (see-through, saturated: ruby by default), plastic, wood, stone (also concrete), rubber." },
+                        "description": "painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass via color), bronze (green verdigris patina in creases), leather (grips, straps, belts), fabric (woven cloth: banners, sacks, upholstery), ceramic (glazed pottery, tiles; chips show clay), bone (also ivory, horn), glass (clear and see-through; color tints it), gemstone (see-through, saturated: ruby by default), skin (characters and creatures: mottled, warmer in creases, pores; give the skin colour), plastic, wood, stone (also concrete), rubber." },
                     "color": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3,
                         "description": "Main colour, linear RGB 0 to 1 (paint colour for painted_metal). Defaults to the preset's." },
                     "color_hex": { "type": "string", "description": "Main colour as sRGB hex, e.g. \"#5a6b2e\", instead of `color`." },
@@ -298,7 +392,9 @@ pub fn definitions() -> Value {
                         "enum": ["front", "back", "left", "right", "top", "three_quarter"] } },
                     "size": { "type": "integer", "description": "Pixels per view, 128 to 1024. Default 384." },
                     "focus": { "type": "array", "items": { "type": "integer" },
-                        "description": "Object ids to zoom in on (a close-up of small parts such as a hilt or a handle). The rest of the scene is still drawn." } }),
+                        "description": "Object ids to zoom in on (a close-up of small parts such as a hilt or a handle). The rest of the scene is still drawn." },
+                    "focus_point": vec3_schema("Zoom in on this world point instead, e.g. a character's head_center or hand landmark."),
+                    "focus_radius": { "type": "number", "description": "With focus_point: how much to show around it, in metres. Default 0.3." } }),
             &[]),
         tool("export_glb",
             "Save the whole scene as a .glb file (glTF 2.0) for Unity, Unreal, Godot, Blender or the web.",
@@ -361,6 +457,9 @@ pub fn call(scene: &mut Scene, name: &str, args: &Value) -> Option<Result<ToolOu
             Ok(deform::slice(m, axis, cuts.clamp(1, 64) as u32))
         }),
         "move_vertices" => move_vertices(scene, args).map(Into::into),
+        "create_character" => create_character(scene, args).map(Into::into),
+        "sculpt_body" => sculpt_body(scene, args).map(Into::into),
+        "sculpt" => sculpt(scene, args).map(Into::into),
         "list_objects" => Ok(list_objects(scene).into()),
         "check_asset" => Ok(check_asset(scene).into()),
         "get_object" => get_object(scene, args).map(Into::into),
@@ -872,6 +971,345 @@ fn move_vertices(scene: &mut Scene, args: &Value) -> Result<Value, String> {
     Ok(out)
 }
 
+fn detail_options(args: &Value) -> Result<MeshOptions, String> {
+    let resolution = match args.get("detail").and_then(Value::as_str) {
+        None | Some("medium") => 160,
+        Some("low") => 96,
+        Some("high") => 256,
+        Some(other) => {
+            return Err(format!(
+                "`detail` must be low, medium or high, not `{other}`"
+            ))
+        }
+    };
+    Ok(MeshOptions {
+        resolution,
+        ..MeshOptions::default()
+    })
+}
+
+/// Parse parts, accepting `radius` as shorthand for both capsule radii.
+fn parse_parts(v: &Value, key: &str) -> Result<Vec<SdfPart>, String> {
+    let arr = v
+        .as_array()
+        .ok_or(format!("`{key}` must be a list of parts"))?;
+    arr.iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let mut p = p.clone();
+            if let Some(o) = p.as_object_mut() {
+                if let Some(r) = o.get("radius").cloned() {
+                    o.entry("radius_a").or_insert(r.clone());
+                    o.entry("radius_b").or_insert(r);
+                    o.remove("radius");
+                }
+                if o.get("shape").and_then(Value::as_str) == Some("sphere") {
+                    o.insert("shape".into(), json!("ellipsoid"));
+                    if let Some(r) = o.get("radius_a").and_then(Value::as_f64) {
+                        o.insert("radii".into(), json!([r, r, r]));
+                        o.remove("radius_a");
+                        o.remove("radius_b");
+                    }
+                }
+            }
+            serde_json::from_value::<SdfPart>(p).map_err(|e| format!("`{key}` part {i}: {e}"))
+        })
+        .collect()
+}
+
+fn part_names(parts: &[SdfPart]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for p in parts {
+        if !p.name.is_empty() && !names.contains(&p.name) {
+            names.push(p.name.clone());
+        }
+    }
+    names
+}
+
+fn sculpt_body(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let opts = detail_options(args)?;
+    let existing = args.get("id").and_then(Value::as_u64).map(|n| n as u32);
+    let mut parts: Vec<SdfPart> = match existing {
+        Some(id) => scene
+            .object(id)
+            .map_err(|e| e.to_string())?
+            .body
+            .clone()
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    if let Some(v) = args.get("parts") {
+        parts = parse_parts(v, "parts")?;
+    }
+    if let Some(edits) = args.get("edit_parts").and_then(Value::as_array) {
+        for e in edits {
+            let name = e
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or("every `edit_parts` entry needs the `name` of the part to change")?;
+            let mut found = false;
+            for p in parts.iter_mut().filter(|p| p.name == name) {
+                let mut merged = serde_json::to_value(&*p).map_err(|e| e.to_string())?;
+                for (k, v) in e.as_object().into_iter().flatten() {
+                    merged[k] = v.clone();
+                }
+                *p = parse_parts(&json!([merged]), "edit_parts")?.remove(0);
+                found = true;
+            }
+            if !found {
+                return Err(format!(
+                    "no part named `{name}`. Parts: {}",
+                    part_names(&parts).join(", ")
+                ));
+            }
+        }
+    }
+    if let Some(names) = args.get("remove_parts").and_then(Value::as_array) {
+        for n in names.iter().filter_map(Value::as_str) {
+            let before = parts.len();
+            parts.retain(|p| p.name != n);
+            if parts.len() == before {
+                return Err(format!("no part named `{n}` to remove"));
+            }
+        }
+    }
+    if let Some(v) = args.get("add_parts") {
+        parts.extend(parse_parts(v, "add_parts")?);
+    }
+    if parts.is_empty() {
+        return Err("give `parts` (or `id` of a body plus changes)".into());
+    }
+    let mesh = sdf::build(&parts, opts)?;
+    let faces = mesh.faces.len();
+    let watertight = mesh.is_closed_manifold();
+    let id = match existing {
+        Some(id) => {
+            scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
+            id
+        }
+        None => {
+            let name = args.get("name").and_then(Value::as_str).unwrap_or("Body");
+            scene.add_object(name, mesh).map_err(|e| e.to_string())?
+        }
+    };
+    if let Some(name) = args.get("name").and_then(Value::as_str) {
+        scene.object_mut(id).map_err(|e| e.to_string())?.name = name.into();
+    }
+    let obj = scene.object_mut(id).map_err(|e| e.to_string())?;
+    obj.body = Some(parts.clone());
+    let textured = scene
+        .material(scene.object(id).map_err(|e| e.to_string())?.material)
+        .is_ok_and(|m| m.textures.is_some());
+    let mut out =
+        json!({ "id": id, "faces": faces, "parts": parts.len(), "part_names": part_names(&parts) });
+    if !watertight {
+        out["note"] = json!(
+            "Some very thin parts did not mesh cleanly. Make them thicker or use detail \"high\"."
+        );
+    }
+    if textured {
+        out["textures_note"] = json!(
+            "Call apply_smart_material again: the baked textures no longer match the new shape."
+        );
+    }
+    Ok(out)
+}
+
+fn create_character(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let opt_f = |k: &str| args.get(k).and_then(Value::as_f64).map(|v| v as f32);
+    let species = match args.get("species").and_then(Value::as_str) {
+        None => None,
+        Some(s) => Some(character::Species::from_name(s).ok_or(format!("unknown species `{s}`"))?),
+    };
+    let ears = match args.get("ears").and_then(Value::as_str) {
+        None => None,
+        Some("round") => Some(character::Ears::Round),
+        Some("pointed") => Some(character::Ears::Pointed),
+        Some("long") => Some(character::Ears::Long),
+        Some(o) => return Err(format!("`ears` must be round, pointed or long, not `{o}`")),
+    };
+    let pose = match args.get("pose").and_then(Value::as_str) {
+        None => None,
+        Some("relaxed") => Some(character::Pose::Relaxed),
+        Some("a_pose") => Some(character::Pose::APose),
+        Some(o) => return Err(format!("`pose` must be relaxed or a_pose, not `{o}`")),
+    };
+    let params = CharacterParams {
+        species,
+        height: opt_f("height"),
+        feminine: args
+            .get("feminine")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        bulk: opt_f("bulk"),
+        gut: opt_f("gut"),
+        head_size: opt_f("head_size"),
+        arm_length: opt_f("arm_length"),
+        leg_length: opt_f("leg_length"),
+        hunch: opt_f("hunch"),
+        jaw: opt_f("jaw"),
+        ears,
+        pose,
+    };
+    let c = character::build_character(&params)?;
+    let mesh = sdf::build(&c.parts, detail_options(args)?)?;
+    let faces = mesh.faces.len();
+    let species_name = c.species.name();
+    let title = {
+        let mut t = species_name.to_string();
+        t[..1].make_ascii_uppercase();
+        t
+    };
+    let name = args
+        .get("name")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .unwrap_or(format!("{title} body"));
+    let body = scene.add_object(name, mesh).map_err(|e| e.to_string())?;
+    scene.object_mut(body).map_err(|e| e.to_string())?.body = Some(c.parts.clone());
+
+    // Eyeballs: separate objects so they get their own glossy material.
+    let eye_mat = scene.add_material(Material {
+        name: "Eye".into(),
+        base_color: [0.02, 0.012, 0.008, 1.0],
+        metallic: 0.0,
+        roughness: 0.06,
+        ..Material::default()
+    });
+    let mut eye_ids = Vec::new();
+    for (side, key) in [("Left", "left_eye"), ("Right", "right_eye")] {
+        let eye = Primitive::UvSphere {
+            radius: c.eye_radius,
+            segments: 24,
+            rings: 12,
+        }
+        .build();
+        let id = scene
+            .add_object(format!("{side} eye"), eye)
+            .map_err(|e| e.to_string())?;
+        scene
+            .object_mut(id)
+            .map_err(|e| e.to_string())?
+            .transform
+            .translation = c.landmarks[key];
+        scene
+            .assign_material(id, eye_mat)
+            .map_err(|e| e.to_string())?;
+        eye_ids.push(id);
+    }
+    let round = |v: Vec3| v.to_array().map(|c| (c * 1000.0).round() / 1000.0);
+    let landmarks: serde_json::Map<String, Value> = c
+        .landmarks
+        .iter()
+        .map(|(k, v)| (k.clone(), json!(round(*v))))
+        .collect();
+    Ok(json!({
+        "body": body,
+        "eyes": eye_ids,
+        "species": species_name,
+        "height": c.height,
+        "faces": faces,
+        "landmarks": landmarks,
+        "part_names": part_names(&c.parts),
+        "suggested_skin_hex": c.species.skin_hex(),
+        "next": "Render it. Adjust proportions with sculpt_body (id, edit_parts by name). Add character with sculpt (crease wrinkles, inflate muscles, noise for rough skin). Model clothing, armour, hair, tusks, horns and props as separate objects placed at the landmarks. Then apply_smart_material: skin on the body, and leather, fabric, metal and bone on the rest."
+    }))
+}
+
+fn sculpt(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let id = object_id(args, "id")?;
+    apply_object_scale(scene, id)?;
+    let obj = scene.object(id).map_err(|e| e.to_string())?;
+    let to_local = obj.transform.matrix().inverse();
+    let radius = positive(args, "radius", None)?;
+    let name = args
+        .get("brush")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let brush = match name {
+        "inflate" => Brush::Inflate,
+        "crease" => Brush::Crease,
+        "pinch" => Brush::Pinch,
+        "smooth" => Brush::Smooth,
+        "flatten" => Brush::Flatten,
+        "grab" => {
+            let o = floats::<3>(args, "offset")?.ok_or("grab needs `offset`")?;
+            Brush::Grab {
+                offset: to_local.transform_vector3(Vec3::from(o)),
+            }
+        }
+        "noise" => Brush::Noise {
+            scale: positive(args, "scale", Some(radius / 4.0))?,
+        },
+        _ => {
+            return Err(
+                "`brush` must be inflate, crease, pinch, smooth, flatten, grab or noise".into(),
+            )
+        }
+    };
+    let default_strength = match brush {
+        Brush::Pinch | Brush::Smooth | Brush::Flatten => 0.5,
+        Brush::Grab { .. } => 1.0,
+        _ => 0.01,
+    };
+    let strength = match args.get("strength").filter(|v| !v.is_null()) {
+        None => default_strength,
+        Some(_) => number(args, "strength")?,
+    };
+    let points: Vec<Vec3> = match args.get("points").filter(|v| !v.is_null()) {
+        None => Vec::new(),
+        Some(v) => v
+            .as_array()
+            .ok_or("`points` must be a list of [x, y, z]")?
+            .iter()
+            .map(|p| {
+                let a: Vec<f32> = p
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_f64().map(|x| x as f32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if a.len() == 3 {
+                    Ok(to_local.transform_point3(Vec3::new(a[0], a[1], a[2])))
+                } else {
+                    Err("every point must be [x, y, z]".to_string())
+                }
+            })
+            .collect::<Result<_, _>>()?,
+    };
+    let stroke = Stroke {
+        points,
+        radius,
+        strength,
+        symmetric: args
+            .get("symmetric")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    };
+    let has_body = obj.body.is_some();
+    let textured = scene
+        .material(obj.material)
+        .is_ok_and(|m| m.textures.is_some());
+    let (mut mesh, moved) = brushes::sculpt(&obj.mesh, brush, &stroke)?;
+    mesh.clear_uvs();
+    scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
+    let mut out = json!({ "id": id, "moved_vertices": moved });
+    if moved == 0 {
+        out["note"] = json!("Nothing was within `radius` of the points. Check the coordinates against the object's bounds or the character landmarks, or use a larger radius.");
+    } else if moved < 12 {
+        out["note"] = json!("Only a few vertices moved: the surface is coarse here. Subdivide first or use a larger radius.");
+    } else if has_body {
+        out["note"] = json!("Rebuilding this body with sculpt_body will discard sculpt strokes.");
+    }
+    if textured {
+        out["textures_note"] = json!("Call apply_smart_material again when the shape is final.");
+    }
+    Ok(out)
+}
+
 /// Problems a reviewer would spot, each with the fix.
 fn check_asset(scene: &Scene) -> Value {
     let mut issues: Vec<Value> = Vec::new();
@@ -1027,6 +1465,13 @@ fn get_object(scene: &Scene, args: &Value) -> Result<Value, String> {
     out["face_list_truncated"] = json!(o.mesh.faces.len() > max);
     let m = scene.material(o.material).map_err(|e| e.to_string())?;
     out["material_detail"] = serde_json::to_value(m).unwrap_or(Value::Null);
+    if let Some(parts) = &o.body {
+        if args.get("parts").and_then(Value::as_bool).unwrap_or(false) {
+            out["body_parts"] = serde_json::to_value(parts).unwrap_or(Value::Null);
+        } else {
+            out["body_part_names"] = json!(part_names(parts));
+        }
+    }
     Ok(out)
 }
 
@@ -1160,7 +1605,11 @@ fn render_preview(scene: &Scene, args: &Value) -> Result<ToolOutput, String> {
         ),
         _ => None,
     };
-    let img = render_sheet_focused(scene, &views, size, focus.as_deref());
+    let region = match floats::<3>(args, "focus_point")? {
+        Some(c) => Some((Vec3::from(c), positive(args, "focus_radius", Some(0.3))?)),
+        None => None,
+    };
+    let img = render_sheet_framed(scene, &views, size, focus.as_deref(), region);
     Ok(ToolOutput {
         data: json!({ "views": views.iter().map(|v| v.name()).collect::<Vec<_>>(), "width": img.width, "height": img.height }),
         image_png: Some(img.to_png()),

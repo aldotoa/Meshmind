@@ -27,6 +27,23 @@ placeholders, so use create_primitive only for boxy parts.\n\
    - extrude_outline: flat parts with a distinctive silhouette (axe heads, shields, brackets, gears).\n\
    - sweep: tubes along a path (rope, cables, pipes, rings, chains, cord or leather wrapped round a grip).\n\
    - deform (bend, twist, taper) and move_vertices: curve, twist or reshape a part after creating it.\n\
+   - sculpt_body: organic forms (creatures, animals, tentacles, rocks, roots, food) as overlapping \
+     ellipsoids, tapered capsules and rounded boxes melted into ONE smooth surface.\n\
+CHARACTERS AND CREATURES are different from props: never assemble a body from separate spheres, cylinders \
+and boxes (it looks like a stack of toys). Start every humanoid with create_character (species human, orc, \
+goblin, dwarf or troll; options for height, bulk, gut, hunch, jaw, ears, feminine, pose). It returns one \
+smooth body with anatomy, eyeballs and landmarks (eyes, mouth, lower canines, hand grips, waist_front/left/back, \
+shoulder_top, forearm). Then: (a) adjust proportions with sculpt_body id + edit_parts by part name; (b) add \
+character with sculpt: crease for frown lines, nose-to-mouth folds, muscle separations and wrinkles, inflate \
+for cheekbones, muscles and veins, noise for rough hide (strokes mirror left/right and snap to the skin); \
+(c) build tusks, horns and claws as small sculpt_body capsules tapering to radius 0, and clothing, armour, \
+belts, bracers and weapons as separate props sized from the landmarks, overlapping the skin slightly so \
+nothing floats; (d) apply_smart_material: skin on the body (orc #3d5226, human #c58c6a), bone on tusks, \
+leather, fabric and metal on gear. Anatomy that sells a character: a neck (never a head sitting on the \
+shoulders), shoulders sloping from the neck, elbows at the waist, wrists at the crotch, hands about the size \
+of the face, feet as long as the forearm, knees halfway between hip and heel, and a clear silhouette \
+(orcs: broad chest, narrow waist, hunched; goblins: big head, ears and nose, thin limbs). Check the face \
+with render_preview focus_point = landmarks.head_center, focus_radius about 0.15 times the height.\n\
 3. Detail: inset then extrude (using the returned inner_faces) for panels and recesses, boolean for holes \
 and cut-outs, array and mirror for repeats. Small trim parts (rings, rivets, ferrules, straps, hinges) add \
 a lot of realism.\n\
@@ -34,7 +51,7 @@ a lot of realism.\n\
 first, materials last: any geometry edit clears UVs and baked textures.\n\
 5. Surface: apply_smart_material on every part; it bakes edge wear, grime and a normal map from the shape. \
 Presets: polished_metal (blades, armour, chrome), bare_metal (cast or machined parts), painted_metal, \
-rusty_metal, gold (also brass), bronze (patina), wood, leather (grips, straps), fabric (cloth, sacks, \
+rusty_metal, gold (also brass), bronze (patina), skin (characters; give the skin colour), wood, leather (grips, straps), fabric (cloth, sacks, \
 banners), stone (also concrete), ceramic (pottery, tiles), bone (also ivory, horn), plastic, rubber, glass \
 and gemstone (see-through; color tints them). Pick colours with color_hex and keep wear and dirt believable: \
 0.2 to 0.4 for used items, higher only for battered ones. Use set_material only for flat colours, glowing \
@@ -47,7 +64,7 @@ Common mistakes: everything built from cubes and cylinders; one object for the w
 just off each other; the model not standing on y = 0; skipping bevels; wear or dirt at 1.0 on everything; \
 editing shape after materials without re-applying them. Every change can be undone. Prompts model_asset, \
 refine_asset and review_asset describe these workflows, and docs/RECIPES.md in the MeshMind repository shows \
-worked examples (sword, axe, barrel, potion bottle).";
+worked examples (sword, axe, barrel, potion bottle, orc warrior).";
 
 /// Prompt templates the user's agent can offer (MCP `prompts`).
 fn prompts() -> Value {
@@ -109,6 +126,10 @@ fn get_prompt(params: &Value) -> Result<Value, (i64, String)> {
                 "Using the MeshMind tools, model this game asset: {description}\n{style}\n\n\
                  Work like a professional 3D artist:\n\
                  1. Decide the real-world size in metres and list the parts. Start with clear_scene.\n\
+                 If it is a character or creature, start the body with create_character (humanoids) or \
+                 sculpt_body (other creatures), shape it with sculpt_body edit_parts and sculpt brushes, \
+                 and add gear as separate parts placed at the returned landmarks. Never build a body from \
+                 separate primitives.\n\
                  2. Block out each part with the shape tool that fits its silhouette (loft for tapering \
                  parts, lathe for round parts, extrude_outline for flat silhouettes, sweep for tubes and \
                  wraps; create_primitive only for boxy parts) and place it with set_transform, giving \

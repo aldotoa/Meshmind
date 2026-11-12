@@ -98,6 +98,56 @@ Move or scale the vertices of an object inside a world-space box, for shaping de
 | `scale` | array of number | Scale around the box centre, e.g. [1.5, 1, 1.5]. |
 | `translate` | array of number | Move by [x, y, z] metres. |
 
+## `create_character`
+
+Start a character from a ready-made body with believable anatomy: one smooth, watertight surface (no visible joins) with head, face (brow, eye sockets, nose, lips, ears), neck, muscles, arms, five-fingered hands, legs and feet, plus eyeballs as separate objects. ALWAYS start humanoids and creatures here instead of stacking primitives. Returns the body id, eye ids and `landmarks` (world points such as left_hand_grip, waist, head_top, left_lower_canine) to place weapons, belts, armour, tusks and hair. Then reshape with sculpt_body (edit_parts by name) and sculpt, and add clothing, armour and props as separate objects. Faces +Z; the character's left is +X; feet on y = 0.
+
+| Argument | Type | Description |
+|---|---|---|
+| `arm_length` | number | Arm length multiplier, 1 normal. |
+| `bulk` | number | 0 lean, 0.5 average, 1 massive. Defaults to the species'. |
+| `detail` | one of `low`, `medium`, `high` | Mesh density. Default medium. |
+| `ears` | one of `round`, `pointed`, `long` |  |
+| `feminine` | boolean | Narrower shoulders and waist, wider hips, breasts, finer jaw. |
+| `gut` | number | Belly size, 0 flat to 1 big. |
+| `head_size` | number | Head size multiplier, 1 normal. Stylized characters often use 1.2 to 1.5. |
+| `height` | number | Standing height in metres. Defaults to the species' (human 1.8, orc 2.05, goblin 1.0, dwarf 1.35, troll 2.8). |
+| `hunch` | number | 0 upright to 1 stooped. |
+| `jaw` | number | 0 small jaw to 1 heavy jaw with underbite. |
+| `leg_length` | number | Leg length multiplier, 1 normal. |
+| `name` | string |  |
+| `pose` | one of `relaxed`, `a_pose` | relaxed (arms near the body, default) or a_pose (arms 45 degrees out, for rigging). |
+| `species` | one of `human`, `orc`, `goblin`, `dwarf`, `troll` | Sets proportions: human (7.5 heads tall), orc (broad, hunched, heavy jaw, pointed ears), goblin (small, big head, long ears and nose, pot belly), dwarf (short, wide, barrel chest), troll (huge, long arms, stooped). Default human. |
+
+## `sculpt_body`
+
+Model organic shapes as clay: overlapping volumes (ellipsoids, tapered capsules, rounded boxes) melted together into ONE smooth, watertight surface. Use it for creatures, monsters, animals, tentacles, rocks, roots, food and any organic form, never a pile of separate primitives. `blend` (metres) is how much a part melts into the parts before it: 0.01 to 0.03 for tight joins, 0.05 to 0.15 for soft fleshy transitions. op "subtract" carves (eye sockets, mouths, grooves). `mirror` adds a copy across x = 0 (build symmetric things centred on x = 0, facing +Z). Pass `id` to rebuild an existing body: `edit_parts` changes named parts (only the fields given), `add_parts` and `remove_parts` add or drop parts. Rebuilding discards sculpt strokes, so settle the big forms first.
+
+| Argument | Type | Description |
+|---|---|---|
+| `add_parts` | array of object | Parts to append to the body named by `id`. |
+| `detail` | one of `low`, `medium`, `high` | Mesh density. Default medium. Thin parts (fingers) automatically get finer detail. |
+| `edit_parts` | array of object | Changes to existing parts, matched by `name`, e.g. [{"name": "ear", "radii": [0.02, 0.06, 0.2]}, {"name": "belly", "center": [0, 1.0, 0.2]}]. Only the fields given change. |
+| `id` | integer | Rebuild this body (from sculpt_body or create_character) instead of creating a new object. |
+| `name` | string |  |
+| `parts` | array of object | The full list of parts, in order. Replaces the body's parts when `id` is given. |
+| `remove_parts` | array of string | Names of parts to drop. |
+
+## `sculpt`
+
+Sculpt a dense organic surface (from sculpt_body or create_character, or after subdivide) with a brush along a stroke, like ZBrush. Every vertex within `radius` of the stroke moves, fading smoothly to the edge. Mirrored across the object's x = 0 by default. Brushes: inflate (push out by `strength` metres, negative pushes in: muscles, cheekbones, knuckles, veins with a small radius), crease (groove `strength` metres deep: wrinkles, eyelids, lips, muscle separations, scars), pinch (0 to 1: sharpen a ridge such as a jaw line), smooth (0 to 1), flatten (0 to 1: facial planes, worn areas), grab (move by `offset`: pull out an ear, nose or chin), noise (lumps `strength` metres high and `scale` metres across: warts, rough hide, rock). Points are world coordinates on the surface; use create_character landmarks or get_object bounds to find them.
+
+| Argument | Type | Description |
+|---|---|---|
+| `brush` (required) | one of `inflate`, `crease`, `pinch`, `smooth`, `flatten`, `grab`, `noise` |  |
+| `id` (required) | integer | Object id. |
+| `offset` | array of number | grab only: how far to drag, [x, y, z] metres. |
+| `points` | array of array | Stroke path as [x, y, z] world points (one point is a single dab). Omit to affect the whole object (inflate, smooth and noise only). |
+| `radius` (required) | number | Brush radius in metres. |
+| `scale` | number | noise only: bump size in metres. Default radius / 4. |
+| `strength` | number | Metres for inflate, crease and noise; 0 to 1 for pinch, smooth and flatten. Default 0.5 for those, 0.01 for the others. |
+| `symmetric` | boolean | Also apply mirrored across x = 0. Default true. |
+
 ## `list_objects`
 
 List all objects with id, name, transform, world-space size and bounding box, face count and material.
@@ -114,6 +164,7 @@ Details of one object, including each face's index, centre and normal (local spa
 |---|---|---|
 | `id` (required) | integer | Object id. |
 | `max_faces` | integer | Limit on faces listed. Default 100. |
+| `parts` | boolean | For bodies from sculpt_body or create_character: list every part in full (shape, position, size) instead of just names. |
 
 ## `set_transform`
 
@@ -260,7 +311,7 @@ Give an object a realistic, textured material in one step: the surface is unwrap
 | `color_hex` | string | Main colour as sRGB hex, e.g. "#5a6b2e", instead of `color`. |
 | `dirt` | number | Grime in creases and dust: 0 clean, 1 filthy. Default 0.3. |
 | `id` (required) | integer | Object id. |
-| `preset` (required) | one of `painted_metal`, `bare_metal`, `rusty_metal`, `plastic`, `wood`, `stone`, `rubber`, `polished_metal`, `gold`, `leather`, `bronze`, `fabric`, `ceramic`, `bone`, `glass`, `gemstone` | painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass via color), bronze (green verdigris patina in creases), leather (grips, straps, belts), fabric (woven cloth: banners, sacks, upholstery), ceramic (glazed pottery, tiles; chips show clay), bone (also ivory, horn), glass (clear and see-through; color tints it), gemstone (see-through, saturated: ruby by default), plastic, wood, stone (also concrete), rubber. |
+| `preset` (required) | one of `painted_metal`, `bare_metal`, `rusty_metal`, `plastic`, `wood`, `stone`, `rubber`, `polished_metal`, `gold`, `leather`, `bronze`, `fabric`, `ceramic`, `bone`, `glass`, `gemstone`, `skin` | painted_metal (paint over metal), bare_metal (cast or machined), rusty_metal, polished_metal (blades, armour, chrome: mirror-like, brushed along Y), gold (also brass via color), bronze (green verdigris patina in creases), leather (grips, straps, belts), fabric (woven cloth: banners, sacks, upholstery), ceramic (glazed pottery, tiles; chips show clay), bone (also ivory, horn), glass (clear and see-through; color tints it), gemstone (see-through, saturated: ruby by default), skin (characters and creatures: mottled, warmer in creases, pores; give the skin colour), plastic, wood, stone (also concrete), rubber. |
 | `resolution` | one of  | Texture size. Default 1024. |
 | `scale` | number | Size of patterns (blotches, wood grain) in metres. Default 0.15. |
 | `seed` | integer | Change for a different random pattern. |
@@ -281,6 +332,8 @@ Render the scene and return an image so you can check your work. Use it after ev
 | Argument | Type | Description |
 |---|---|---|
 | `focus` | array of integer | Object ids to zoom in on (a close-up of small parts such as a hilt or a handle). The rest of the scene is still drawn. |
+| `focus_point` | array of number | Zoom in on this world point instead, e.g. a character's head_center or hand landmark. |
+| `focus_radius` | number | With focus_point: how much to show around it, in metres. Default 0.3. |
 | `size` | integer | Pixels per view, 128 to 1024. Default 384. |
 | `views` | array of string |  |
 

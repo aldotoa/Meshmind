@@ -4,6 +4,7 @@
 //! driven from the MCP server, the desktop app, or tests.
 
 pub mod bevel;
+pub mod character;
 pub mod csg;
 pub mod deform;
 pub mod export;
@@ -15,6 +16,8 @@ pub mod poly;
 pub mod primitives;
 pub mod project;
 pub mod scene;
+pub mod sculpt;
+pub mod sdf;
 pub mod shapes;
 pub mod smart;
 pub mod texture;
