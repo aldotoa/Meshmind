@@ -7,6 +7,14 @@ All notable changes are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- Characters and organic shapes: `sculpt_body` melts ellipsoids, tapered
+  capsules and rounded boxes into one smooth, watertight surface, editable by
+  part name; `sculpt` brushes (inflate, crease, pinch, smooth, flatten, grab,
+  noise), mirrored and snapped to the surface; `create_character` starter
+  bodies (human, orc, goblin, dwarf, troll) with eyes and landmarks for gear.
+- `skin` smart material, and `render_preview` `focus_point`/`focus_radius`.
+- Character workflow and anatomy guide in the agent instructions, and an orc
+  warrior recipe.
 - Shape tools that build parts the way artists do: `loft` (blades, handles,
   horns), `lathe` (round parts), `extrude_outline` (flat silhouettes) and
   `sweep` (tubes, rope, rings, helical grip wraps).
