@@ -12,6 +12,7 @@ pub mod mesh;
 pub mod ops;
 pub mod poly;
 pub mod primitives;
+pub mod project;
 pub mod scene;
 pub mod smart;
 pub mod texture;

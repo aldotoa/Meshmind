@@ -340,3 +340,128 @@ fn inset_returns_inner_faces_for_a_real_recess() {
         mesh.volume()
     );
 }
+
+#[test]
+fn save_and_open_project() {
+    let dir = std::env::temp_dir().join(format!("meshmind-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("crate.meshmind");
+    let path = path.to_str().unwrap();
+
+    let mut s = Server::new();
+    let id = call(
+        &mut s,
+        "create_primitive",
+        json!({ "shape": "cube", "name": "Crate" }),
+    )["structuredContent"]["id"]
+        .as_u64()
+        .unwrap();
+    let r = call(
+        &mut s,
+        "apply_smart_material",
+        json!({ "id": id, "preset": "wood", "resolution": 256 }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let r = call(&mut s, "save_project", json!({ "path": path }));
+    assert_eq!(r["isError"], false, "{r}");
+
+    let mut fresh = Server::new();
+    let r = call(&mut fresh, "open_project", json!({ "path": path }));
+    assert_eq!(r["isError"], false, "{r}");
+    assert_eq!(r["structuredContent"]["objects"][0]["name"], "Crate");
+    assert_eq!(fresh.scene.objects(), s.scene.objects());
+    let textured = fresh.scene.materials().any(|(_, m)| m.textures.is_some());
+    assert!(textured, "baked textures are kept");
+    // Opening is undoable.
+    call(&mut fresh, "undo", json!({}));
+    assert!(fresh.scene.objects().is_empty());
+
+    let r = call(&mut s, "save_project", json!({ "path": "model.txt" }));
+    assert_eq!(r["isError"], true);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn prompts_describe_the_workflow() {
+    let mut s = Server::new();
+    let init = rpc(&mut s, 1, "initialize", json!({}));
+    assert!(init["result"]["capabilities"]["prompts"].is_object());
+    let list = rpc(&mut s, 2, "prompts/list", json!({}));
+    assert_eq!(list["result"]["prompts"][0]["name"], "model_asset");
+    let got = rpc(
+        &mut s,
+        3,
+        "prompts/get",
+        json!({ "name": "model_asset", "arguments": { "description": "a wooden stool" } }),
+    );
+    let text = got["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains("a wooden stool") && text.contains("export_glb"));
+    let missing = rpc(&mut s, 4, "prompts/get", json!({ "name": "model_asset" }));
+    assert_eq!(missing["error"]["code"], -32602);
+}
+
+#[test]
+fn tool_reference_doc_is_up_to_date() {
+    let committed = include_str!("../../../docs/TOOLS.md").replace("\r\n", "\n");
+    assert!(
+        committed == meshmind_mcp::tool_reference_markdown(),
+        "docs/TOOLS.md is stale: run `cargo run -p meshmind-mcp --example tool_docs > docs/TOOLS.md`"
+    );
+}
+
+#[test]
+fn scaled_objects_are_edited_in_metres() {
+    let mut s = Server::new();
+    let id = call(&mut s, "create_primitive", json!({ "shape": "cube" }))["structuredContent"]
+        ["id"]
+        .as_u64()
+        .unwrap();
+    call(
+        &mut s,
+        "set_transform",
+        json!({ "id": id, "translation": [0, 0.1, 0], "scale": [2, 0.2, 1] }),
+    );
+    let before = call(&mut s, "list_objects", json!({}))["structuredContent"]["objects"][0].clone();
+    let r = call(
+        &mut s,
+        "bevel",
+        json!({ "id": id, "amount": 0.02, "segments": 1 }),
+    );
+    assert_eq!(r["structuredContent"]["scale_applied"], true, "{r}");
+    let after = call(&mut s, "list_objects", json!({}))["structuredContent"]["objects"][0].clone();
+    // Same place and size in the world, now with scale 1.
+    assert_eq!(before["size"], after["size"]);
+    let o = &s.scene.objects()[0];
+    assert_eq!(o.transform.scale, glam::Vec3::ONE);
+    let b = o.mesh.bounds().unwrap();
+    assert!((b.max.y - b.min.y - 0.2).abs() < 1e-5);
+}
+
+#[test]
+fn hex_colours_are_srgb() {
+    let mut s = Server::new();
+    let id = call(&mut s, "create_primitive", json!({ "shape": "cube" }))["structuredContent"]
+        ["id"]
+        .as_u64()
+        .unwrap();
+    let r = call(
+        &mut s,
+        "set_material",
+        json!({ "id": id, "base_color_hex": "#808080" }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let (_, m) = s.scene.materials().last().unwrap();
+    assert!(
+        (m.base_color[0] - 0.2159).abs() < 1e-3,
+        "{:?}",
+        m.base_color
+    );
+    let r = call(
+        &mut s,
+        "set_material",
+        json!({ "id": id, "base_color_hex": "grey" }),
+    );
+    assert_eq!(r["isError"], true);
+}

@@ -49,6 +49,33 @@ impl Texture {
         top.lerp(bottom, fy)
     }
 
+    /// Decode an 8-bit RGB or RGBA PNG.
+    pub fn from_png(name: impl Into<String>, bytes: &[u8]) -> Result<Texture, String> {
+        let decoder = png::Decoder::new(bytes);
+        let mut reader = decoder.read_info().map_err(|e| format!("bad PNG: {e}"))?;
+        let mut buf = vec![0; reader.output_buffer_size()];
+        let info = reader
+            .next_frame(&mut buf)
+            .map_err(|e| format!("bad PNG: {e}"))?;
+        if info.bit_depth != png::BitDepth::Eight {
+            return Err("only 8-bit PNG textures are supported".into());
+        }
+        let pixels = match info.color_type {
+            png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
+            png::ColorType::Rgb => buf[..info.buffer_size()]
+                .chunks_exact(3)
+                .flat_map(|c| [c[0], c[1], c[2], 255])
+                .collect(),
+            other => return Err(format!("unsupported PNG colour type {other:?}")),
+        };
+        Ok(Texture {
+            name: name.into(),
+            width: info.width,
+            height: info.height,
+            pixels,
+        })
+    }
+
     pub fn to_png(&self) -> Vec<u8> {
         let mut out = Vec::new();
         let mut enc = png::Encoder::new(&mut out, self.width, self.height);
@@ -79,4 +106,36 @@ pub fn srgb_to_linear(c: f32) -> f32 {
 
 pub fn to_u8(c: f32) -> u8 {
     (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+/// Textures are stored in project files as base64 PNG, so files stay small
+/// and can be inspected with ordinary tools.
+impl serde::Serialize for Texture {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use base64::Engine;
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("Texture", 2)?;
+        st.serialize_field("name", &self.name)?;
+        st.serialize_field(
+            "png",
+            &base64::engine::general_purpose::STANDARD.encode(self.to_png()),
+        )?;
+        st.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Texture {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use base64::Engine;
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            name: String,
+            png: String,
+        }
+        let raw = Raw::deserialize(d)?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(raw.png)
+            .map_err(serde::de::Error::custom)?;
+        Texture::from_png(raw.name, &bytes).map_err(serde::de::Error::custom)
+    }
 }

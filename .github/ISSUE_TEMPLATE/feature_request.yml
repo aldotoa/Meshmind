@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest a tool or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What do you want to make?
+      description: Describe the model or result you're after, and where MeshMind falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: A new tool, an option on an existing one, or something else.

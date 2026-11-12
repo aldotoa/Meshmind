@@ -162,6 +162,7 @@ impl PolyMesh {
         if m.matrix3.determinant() < 0.0 {
             for f in &mut out.faces {
                 f.verts.reverse();
+                f.uvs.reverse();
             }
         }
         out

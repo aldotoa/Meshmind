@@ -66,16 +66,16 @@ watches, reviews, and steers.
 - **With the app:** the desktop app hosts the same server on a localhost
   port, and the agent connects to that. The person sees each change live.
 
-## Tool surface (planned)
+## Tool surface
 
-| Group | Tools |
-|---|---|
-| Scene | `list_objects`, `get_object`, `delete_object`, `duplicate_object`, `set_transform`, `group`, `undo`, `redo` |
-| Create | `create_primitive` (cube, sphere, cylinder, plane, torus, cone), `create_from_profile` (lathe/extrude a 2D outline) |
-| Edit | `extrude`, `bevel`, `inset`, `boolean`, `subdivide`, `mirror`, `array`, `deform` |
-| Look | `set_material`, `apply_smart_material` (wear, edge damage, dirt), `unwrap_uvs`, `bake_textures`, `set_lighting_preset` |
-| Review | `render_preview` (multi-angle images), `scene_stats` (poly count, UV coverage, problems) |
-| Output | `export` (glTF/GLB, FBX, OBJ), `save_project`, `load_project` |
+The tools that exist today are listed in [TOOLS.md](TOOLS.md), which is
+generated from the definitions agents see. Planned additions: `group`,
+`create_from_profile` (lathe or extrude a 2D outline), `deform`, `scene_stats`
+(poly count, UV coverage, problems), and FBX/OBJ export.
+
+Project files (`.meshmind`) are JSON holding the editable scene, with baked
+textures as base64 PNG. The desktop app autosaves to its data folder shortly
+after every change and restores the last session at startup.
 
 ## Data model
 
@@ -115,7 +115,7 @@ watches, reviews, and steers.
 - Any geometry edit clears UVs; the agent must re-apply smart materials
   once the shape is final (the tool result says so).
 - The software preview has no shadows; the desktop viewer does.
-- Image-to-3D plugins from the original step 3 plan are not built yet.
+- Image-to-3D plugins are not built yet.
 
 ## Roadmap
 
@@ -126,4 +126,10 @@ watches, reviews, and steers.
 3. **AAA quality layer** (done, except image-to-3D plugins): Manifold
    booleans, UV unwrapping, smart materials baked to PBR textures, lighting
    presets, textured glTF export.
-4. **Polish and launch**: docs, example prompts, signed releases, demo.
+4. **Polish and launch** (done): project files and autosave, agent guide and
+   prompts, documentation, release pipeline with optional code signing, demo
+   gallery.
+
+Next ideas: image-to-3D plugins (bring a concept image, get a starting mesh),
+more material presets, sculpt-style deformers, LODs and collision meshes for
+game engines.

@@ -1,0 +1,124 @@
+name: Release
+
+# Push a tag like v0.1.0 to build installers for every platform and attach
+# them to a draft GitHub release. See docs/RELEASING.md.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  desktop:
+    name: Desktop app (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS Apple Silicon, os: macos-latest, target: aarch64-apple-darwin }
+          - { name: macOS Intel, os: macos-latest, target: x86_64-apple-darwin }
+          - { name: Linux, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { name: Windows, os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    env:
+      SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+      SECRET_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      # Signing is optional: these steps only run when the secrets exist.
+      - name: Enable macOS signing
+        if: runner.os == 'macOS' && env.SECRET_APPLE_CERTIFICATE != ''
+        run: |
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            s="SECRET_$v"
+            if [ -n "${!s}" ]; then echo "$v=${!s}" >> "$GITHUB_ENV"; fi
+          done
+      - name: Enable Windows signing
+        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("$PWD\cert.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $pw = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath "$PWD\cert.pfx" -CertStoreLocation Cert:\CurrentUser\My -Password $pw
+          Remove-Item "$PWD\cert.pfx"
+          $cfg = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = "sha256"; timestampUrl = "http://timestamp.digicert.com" } } }
+          $cfg | ConvertTo-Json -Depth 5 -Compress | Set-Content "$PWD\signing.json"
+          "EXTRA_ARGS=--config $PWD\signing.json" >> $env:GITHUB_ENV
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: cargo tauri
+          args: --target ${{ matrix.target }} ${{ env.EXTRA_ARGS }}
+          tagName: ${{ github.ref_name }}
+          releaseName: MeshMind ${{ github.ref_name }}
+          releaseBody: See CHANGELOG.md for what's new. Connect your agent with docs/AGENTS.md.
+          releaseDraft: true
+          prerelease: false
+
+  mcp:
+    name: meshmind-mcp (${{ matrix.target }})
+    needs: desktop
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mcp-${{ matrix.target }}
+      - run: cargo build --release -p meshmind-mcp --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          name="meshmind-mcp-${{ github.ref_name }}-${{ matrix.target }}"
+          dir="target/${{ matrix.target }}/release"
+          mkdir "$name"
+          cp README.md LICENSE "$name/"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$dir/meshmind-mcp.exe" "$name/"
+            7z a "$name.zip" "$name" > /dev/null
+            echo "ASSET=$name.zip" >> "$GITHUB_ENV"
+          else
+            cp "$dir/meshmind-mcp" "$name/"
+            tar czf "$name.tar.gz" "$name"
+            echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
+          fi
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: ${{ env.ASSET }}

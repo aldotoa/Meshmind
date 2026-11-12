@@ -267,5 +267,8 @@ document.getElementById("copy-cmd").onclick = async () => {
   setTimeout(() => (b.textContent = "Copy Claude Code command"), 1500);
 };
 
+document.getElementById("restored").hidden = !info.restored;
+document.getElementById("new-scene").onclick = () => tool("clear_scene");
+
 await listen("scene-changed", () => refresh());
 refresh();

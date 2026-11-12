@@ -28,4 +28,11 @@ button.ghost { background: #2a2a38; color: var(--text); }
 button.ghost:hover { background: #34344a; }
 button.on { background: var(--accent); }
 .error { color: #ff8a8a; }
-select { background: #2a2a38; color: var(--text); border: 0; border-radius: 6px; padding: 6px 8px; font: inherit; }
+select {
+  -webkit-appearance: none; appearance: none;
+  background: #2a2a38 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23aaa'/%3E%3C/svg%3E") no-repeat right 8px center;
+  color: var(--text); border: 0; border-radius: 6px; padding: 6px 26px 6px 10px; font: inherit; cursor: pointer;
+}
+select:hover { background-color: #34344a; }
+option { background: #2a2a38; color: var(--text); }
+.small { font-size: 12px; }

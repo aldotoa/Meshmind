@@ -19,6 +19,7 @@
       <canvas id="canvas"></canvas>
       <div id="stats" class="overlay top-left"></div>
       <div class="overlay bottom">
+        <button id="new-scene" class="ghost" title="Start an empty scene (can be undone)">New</button>
         <button id="undo" class="ghost" title="Undo (Ctrl+Z)">Undo</button>
         <button id="redo" class="ghost" title="Redo (Ctrl+Shift+Z)">Redo</button>
         <button id="frame" class="ghost" title="Frame all (F)">Frame</button>
@@ -43,6 +44,7 @@
       <h2>Scene</h2>
       <ul id="objects"></ul>
       <p id="error" class="error" hidden></p>
+      <p id="restored" class="muted small" hidden>Restored your last session. Your work is saved automatically.</p>
     </aside>
   </main>
   <script type="module" src="main.js"></script>

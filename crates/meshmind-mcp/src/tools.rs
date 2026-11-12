@@ -31,7 +31,13 @@ impl From<Value> for ToolOutput {
 pub fn is_mutating(name: &str) -> bool {
     !matches!(
         name,
-        "list_objects" | "get_object" | "render_preview" | "export_glb" | "undo" | "redo"
+        "list_objects"
+            | "get_object"
+            | "render_preview"
+            | "export_glb"
+            | "save_project"
+            | "undo"
+            | "redo"
     )
 }
 
@@ -104,7 +110,7 @@ pub fn definitions() -> Value {
             "Push the selected faces out along their normals as one region, adding side walls. \
              Negative distance pushes in, making a recess. Use for legs, handles, panels, greebles.",
             json!({ "id": id_prop(), "faces": faces_schema(),
-                    "distance": { "type": "number", "description": "Metres, in the object's local scale." } }),
+                    "distance": { "type": "number", "description": "Metres." } }),
             &["id", "faces", "distance"]),
         tool("inset",
             "Shrink each selected face towards its centre, leaving a border ring. Returns \
@@ -120,7 +126,7 @@ pub fn definitions() -> Value {
              rounded bevel (1 to 3% of the object's size) is one of the biggest steps towards a \
              professional look. Curved surfaces like a cylinder's side are left alone. Use \
              segments 1 for a flat chamfer (machined or cut look), 3 to 5 for rounded edges.",
-            json!({ "id": id_prop(), "amount": { "type": "number", "description": "Bevel width in local units." },
+            json!({ "id": id_prop(), "amount": { "type": "number", "description": "Bevel width in metres." },
                     "segments": { "type": "integer", "minimum": 1, "maximum": 16, "description": "1 = flat chamfer, more = rounder. Default 3." },
                     "angle": { "type": "number", "description": "Only edges sharper than this many degrees. Default 30." } }),
             &["id", "amount"]),
@@ -145,7 +151,7 @@ pub fn definitions() -> Value {
             &["id", "axis"]),
         tool("array",
             "Repeat an object's mesh several times inside the same object, each copy shifted by \
-             offset (local units). Good for rails, bolts, steps, fences.",
+             offset (metres). Good for rails, bolts, steps, fences.",
             json!({ "id": id_prop(), "count": { "type": "integer", "minimum": 1, "maximum": 256 },
                     "offset": vec3_schema("Shift between copies [x, y, z].") }),
             &["id", "count", "offset"]),
@@ -154,11 +160,13 @@ pub fn definitions() -> Value {
             json!({ "id": id_prop(), "smooth": { "type": "boolean" } }),
             &["id", "smooth"]),
         tool("set_material",
-            "Create a PBR material and assign it to an object. Colors are linear RGB 0 to 1. Use \
+            "Create a PBR material and assign it to an object. Colors are linear RGB 0 to 1 (or use \
+             base_color_hex for an sRGB hex colour). Use \
              metallic 1 for bare metals and 0 for everything else (paint, plastic, wood, stone). \
              Roughness 0 is mirror-like, 1 is fully matte.",
             json!({ "id": id_prop(), "name": { "type": "string" },
                     "base_color": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 4 },
+                    "base_color_hex": { "type": "string", "description": "Colour as sRGB hex, e.g. \"#c0392b\", instead of `base_color`." },
                     "metallic": { "type": "number", "minimum": 0, "maximum": 1 },
                     "roughness": { "type": "number", "minimum": 0, "maximum": 1 },
                     "emissive": vec3_schema("Glow color, linear RGB. Values above 1 glow brighter.") }),
@@ -179,6 +187,7 @@ pub fn definitions() -> Value {
                         "description": "painted_metal (paint over metal), bare_metal, rusty_metal, plastic, wood, stone (also concrete), rubber." },
                     "color": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3,
                         "description": "Main colour, linear RGB 0 to 1 (paint colour for painted_metal). Defaults to the preset's." },
+                    "color_hex": { "type": "string", "description": "Main colour as sRGB hex, e.g. \"#5a6b2e\", instead of `color`." },
                     "wear": { "type": "number", "minimum": 0, "maximum": 1, "description": "Edge wear: 0 new, 0.3 used, 0.7 battered. Default 0.4." },
                     "dirt": { "type": "number", "minimum": 0, "maximum": 1, "description": "Grime in creases and dust: 0 clean, 1 filthy. Default 0.3." },
                     "scale": { "type": "number", "description": "Size of patterns (blotches, wood grain) in metres. Default 0.15." },
@@ -202,6 +211,15 @@ pub fn definitions() -> Value {
         tool("export_glb",
             "Save the whole scene as a .glb file (glTF 2.0) for Unity, Unreal, Godot, Blender or the web.",
             json!({ "path": { "type": "string", "description": "File path ending in .glb." } }),
+            &["path"]),
+        tool("save_project",
+            "Save the editable scene (meshes, materials, baked textures, lighting) as a .meshmind \
+             project file, so work can continue later with open_project. Save before ending a session.",
+            json!({ "path": { "type": "string", "description": "File path ending in .meshmind." } }),
+            &["path"]),
+        tool("open_project",
+            "Replace the current scene with a .meshmind project saved earlier. Can be undone.",
+            json!({ "path": { "type": "string", "description": "File path ending in .meshmind." } }),
             &["path"]),
         tool("undo", "Undo the last change to the scene.", json!({}), &[]),
         tool("redo", "Redo the last undone change.", json!({}), &[]),
@@ -298,6 +316,8 @@ pub fn call(scene: &mut Scene, name: &str, args: &Value) -> Option<Result<ToolOu
         }
         "render_preview" => render_preview(scene, args),
         "export_glb" => export_glb(scene, args).map(Into::into),
+        "save_project" => save_project(scene, args).map(Into::into),
+        "open_project" => open_project(scene, args).map(Into::into),
         _ => return None,
     };
     Some(r)
@@ -437,6 +457,7 @@ fn selection_edit(
     ) -> Result<meshmind_core::PolyMesh, String>,
 ) -> Result<ToolOutput, String> {
     let id = object_id(args, "id")?;
+    let scale_applied = apply_object_scale(scene, id)?;
     let obj = scene.object(id).map_err(|e| e.to_string())?;
     let world_to_local = glam::Mat3::from(obj.transform.matrix().matrix3).transpose();
     let sel = selection(args, world_to_local)?;
@@ -457,7 +478,48 @@ fn selection_edit(
         )
     })?;
     out.data[key] = json!(indices);
+    if scale_applied {
+        out.data["scale_applied"] = json!(true);
+    }
     Ok(out)
+}
+
+/// Bake an object's scale into its mesh (leaving rotation and position), so
+/// widths, distances and texture detail are measured in real metres rather
+/// than stretched with the object. Returns whether anything changed.
+fn apply_object_scale(scene: &mut Scene, id: u32) -> Result<bool, String> {
+    let obj = scene.object(id).map_err(|e| e.to_string())?;
+    let scale = obj.transform.scale;
+    if (scale - Vec3::ONE).abs().max_element() < 1e-6 {
+        return Ok(false);
+    }
+    let mesh = obj.mesh.transformed(&glam::Affine3A::from_scale(scale));
+    scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
+    scene
+        .object_mut(id)
+        .map_err(|e| e.to_string())?
+        .transform
+        .scale = Vec3::ONE;
+    Ok(true)
+}
+
+/// A colour from `<key>` (linear RGB 0 to 1) or `<key>_hex` ("#RRGGBB", sRGB
+/// as in colour pickers and design tools).
+fn color_arg<const N: usize>(args: &Value, key: &str) -> Result<Option<[f32; N]>, String> {
+    let hex_key = format!("{key}_hex");
+    if let Some(h) = args.get(&hex_key).and_then(Value::as_str) {
+        let h = h.trim().trim_start_matches('#');
+        if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("`{hex_key}` must look like \"#a1b2c3\""));
+        }
+        let mut out = [1.0; N];
+        for (i, slot) in out.iter_mut().take(3).enumerate() {
+            let v = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).expect("checked hex");
+            *slot = meshmind_core::texture::srgb_to_linear(v as f32 / 255.0);
+        }
+        return Ok(Some(out));
+    }
+    floats::<N>(args, key)
 }
 
 fn edit(
@@ -470,6 +532,7 @@ fn edit(
     ) -> Result<meshmind_core::PolyMesh, String>,
 ) -> Result<ToolOutput, String> {
     let id = object_id(args, "id")?;
+    let scale_applied = apply_object_scale(scene, id)?;
     let obj = scene.object(id).map_err(|e| e.to_string())?;
     // Normals transform by the inverse transpose, so world -> local uses the transpose.
     let world_to_local = glam::Mat3::from(obj.transform.matrix().matrix3).transpose();
@@ -482,6 +545,9 @@ fn edit(
     let faces = mesh.faces.len();
     scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
     let mut out = json!({ "id": id, "faces": faces });
+    if scale_applied {
+        out["scale_applied"] = json!(true);
+    }
     if textured {
         out["note"] = json!("This object's baked textures no longer match its shape. Call apply_smart_material again when the shape is final.");
     }
@@ -654,7 +720,11 @@ fn set_material(scene: &mut Scene, args: &Value) -> Result<Value, String> {
     if let Some(name) = args.get("name").and_then(Value::as_str) {
         m.name = name.into();
     }
-    if let Some(c) = args.get("base_color").filter(|v| !v.is_null()) {
+    if args.get("base_color_hex").is_some() {
+        if let Some(c) = color_arg::<3>(args, "base_color")? {
+            m.base_color[..3].copy_from_slice(&c);
+        }
+    } else if let Some(c) = args.get("base_color").filter(|v| !v.is_null()) {
         let arr = c
             .as_array()
             .filter(|a| a.len() == 3 || a.len() == 4)
@@ -719,8 +789,40 @@ fn export_glb(scene: &Scene, args: &Value) -> Result<Value, String> {
     Ok(json!({ "path": abs, "bytes": bytes.len(), "objects": scene.objects().len() }))
 }
 
+fn project_path(args: &Value) -> Result<&str, String> {
+    let path = args
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("`path` is required")?;
+    if !path.to_ascii_lowercase().ends_with(".meshmind") {
+        return Err("`path` must end in .meshmind".into());
+    }
+    Ok(path)
+}
+
+fn save_project(scene: &Scene, args: &Value) -> Result<Value, String> {
+    let path = project_path(args)?;
+    let bytes = meshmind_core::project::to_bytes(scene);
+    // Write to a temporary file first so a failed save never destroys the old one.
+    let tmp = format!("{path}.tmp");
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("could not write {path}: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("could not write {path}: {e}"))?;
+    let abs = std::fs::canonicalize(path)
+        .map(|p| p.display().to_string())
+        .unwrap_or(path.to_string());
+    Ok(json!({ "path": abs, "bytes": bytes.len(), "objects": scene.objects().len() }))
+}
+
+fn open_project(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let path = project_path(args)?;
+    let bytes = std::fs::read(path).map_err(|e| format!("could not read {path}: {e}"))?;
+    *scene = meshmind_core::project::from_bytes(&bytes)?;
+    Ok(json!({ "path": path, "objects": list_objects(scene)["objects"].clone() }))
+}
+
 fn unwrap_uvs(scene: &mut Scene, args: &Value) -> Result<Value, String> {
     let id = object_id(args, "id")?;
+    apply_object_scale(scene, id)?;
     let mut mesh = scene.object(id).map_err(|e| e.to_string())?.mesh.clone();
     let stats = uv::unwrap(&mut mesh, &UnwrapOptions::default())?;
     scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
@@ -740,7 +842,7 @@ fn apply_smart_material(scene: &mut Scene, args: &Value) -> Result<Value, String
         Preset::ALL.map(|p| p.name()).join(", ")
     ))?;
     let mut sm = SmartMaterial::new(preset);
-    if let Some(c) = floats::<3>(args, "color")? {
+    if let Some(c) = color_arg::<3>(args, "color")? {
         sm.color = Some(c.map(|v| v.clamp(0.0, 1.0)));
     }
     if let Some(v) = args.get("wear").and_then(Value::as_f64) {
@@ -763,6 +865,7 @@ fn apply_smart_material(scene: &mut Scene, args: &Value) -> Result<Value, String
         return Err("`resolution` must be 256, 512, 1024 or 2048".into());
     }
 
+    let scale_applied = apply_object_scale(scene, id)?;
     let obj = scene.object(id).map_err(|e| e.to_string())?;
     let mut mesh = obj.mesh.clone();
     let mut unwrapped = false;
@@ -788,7 +891,9 @@ fn apply_smart_material(scene: &mut Scene, args: &Value) -> Result<Value, String
     scene
         .assign_material(id, material)
         .map_err(|e| e.to_string())?;
-    Ok(
-        json!({ "id": id, "material": material, "preset": preset.name(), "resolution": resolution, "unwrapped": unwrapped }),
-    )
+    let mut out = json!({ "id": id, "material": material, "preset": preset.name(), "resolution": resolution, "unwrapped": unwrapped });
+    if scale_applied {
+        out["scale_applied"] = json!(true);
+    }
+    Ok(out)
 }

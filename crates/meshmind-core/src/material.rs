@@ -19,11 +19,11 @@ pub struct Material {
     pub emissive: [f32; 3],
     /// Baked textures (shared, so undo snapshots stay cheap). When present,
     /// the factors above multiply them, as in glTF.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub textures: Option<Arc<MaterialTextures>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MaterialTextures {
     pub base_color: Texture,
     /// G = roughness, B = metallic.

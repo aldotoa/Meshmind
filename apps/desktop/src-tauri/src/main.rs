@@ -13,6 +13,50 @@ struct AppState {
     server: Arc<Mutex<Server>>,
     port: u16,
     http_error: Mutex<Option<String>>,
+    autosave: Autosave,
+    /// Set when the last session's scene was restored at startup.
+    restored: Mutex<Option<String>>,
+}
+
+/// Saves the scene to the app's data folder shortly after each change, so
+/// closing the window (or a crash) never loses work.
+#[derive(Clone)]
+struct Autosave(Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>);
+
+impl Autosave {
+    fn changed(&self) {
+        if let Some(tx) = self.0.lock().expect("lock").as_ref() {
+            let _ = tx.send(());
+        }
+    }
+
+    fn start(&self, server: Arc<Mutex<Server>>, path: std::path::PathBuf) {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        *self.0.lock().expect("lock") = Some(tx);
+        std::thread::spawn(move || {
+            while rx.recv().is_ok() {
+                // Wait for the agent to pause, then save once.
+                while rx
+                    .recv_timeout(std::time::Duration::from_millis(800))
+                    .is_ok()
+                {}
+                let scene = server.lock().expect("server lock poisoned").scene.clone();
+                let bytes = meshmind_core::project::to_bytes(&scene);
+                let tmp = path.with_extension("meshmind.tmp");
+                if let Err(e) =
+                    std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &path))
+                {
+                    eprintln!("autosave to {} failed: {e}", path.display());
+                }
+            }
+        });
+    }
+}
+
+fn scene_changed(app: &tauri::AppHandle, rev: u64) {
+    use tauri::Manager;
+    let _ = app.emit("scene-changed", rev);
+    app.state::<AppState>().autosave.changed();
 }
 
 /// Forward one MCP JSON-RPC message from the UI to the embedded server.
@@ -25,7 +69,7 @@ fn mcp(state: State<AppState>, app: tauri::AppHandle, message: Value) -> Value {
         (reply, (s.revision != before).then_some(s.revision))
     };
     if let Some(rev) = changed {
-        let _ = app.emit("scene-changed", rev);
+        scene_changed(&app, rev);
     }
     reply
 }
@@ -41,6 +85,12 @@ fn scene_snapshot(state: State<AppState>) -> Value {
         .map(|o| {
             let mesh = o.mesh.to_mesh();
             let material = s.scene.material(o.material).ok();
+            // Textures go through `material_textures`, so leave them out here.
+            let textured = material.is_some_and(|m| m.textures.is_some());
+            let material = material.map(|m| meshmind_core::Material {
+                textures: None,
+                ..m.clone()
+            });
             let t = &o.transform;
             json!({
                 "id": o.id,
@@ -50,7 +100,7 @@ fn scene_snapshot(state: State<AppState>) -> Value {
                 "normals": mesh.normals.iter().flat_map(|p| p.to_array()).collect::<Vec<f32>>(),
                 "uvs": mesh.uvs.iter().flat_map(|p| p.to_array()).collect::<Vec<f32>>(),
                 "material_id": o.material,
-                "textured": material.is_some_and(|m| m.textures.is_some()),
+                "textured": textured,
                 "indices": mesh.indices,
                 "translation": t.translation.to_array(),
                 "rotation": t.rotation.to_array(),
@@ -103,6 +153,7 @@ fn connection_info(state: State<AppState>) -> Value {
         "url": url,
         "claude_command": format!("claude mcp add --transport http meshmind {url}"),
         "error": state.http_error.lock().expect("lock").clone(),
+        "restored": state.restored.lock().expect("lock").clone(),
     })
 }
 
@@ -118,16 +169,35 @@ fn main() {
             server: server.clone(),
             port,
             http_error: Mutex::new(None),
+            autosave: Autosave(Arc::new(Mutex::new(None))),
+            restored: Mutex::new(None),
         })
         .setup(move |app| {
+            use tauri::Manager;
+            // Restore the last session, then keep it saved.
+            if let Ok(dir) = app.path().app_data_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                let path = dir.join("autosave.meshmind");
+                if let Ok(bytes) = std::fs::read(&path) {
+                    match meshmind_core::project::from_bytes(&bytes) {
+                        Ok(scene) if !scene.objects().is_empty() => {
+                            server.lock().expect("server lock poisoned").scene = scene;
+                            *app.state::<AppState>().restored.lock().expect("lock") =
+                                Some(path.display().to_string());
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("could not restore {}: {e}", path.display()),
+                    }
+                }
+                app.state::<AppState>().autosave.start(server.clone(), path);
+            }
             let handle = app.handle().clone();
             let errors = handle.clone();
             std::thread::spawn(move || {
                 let notify = handle.clone();
                 if let Err(e) = http::serve(server, port, move |rev| {
-                    let _ = notify.emit("scene-changed", rev);
+                    scene_changed(&notify, rev);
                 }) {
-                    use tauri::Manager;
                     let msg = format!("Could not listen on port {port}: {e}");
                     eprintln!("{msg}");
                     *errors.state::<AppState>().http_error.lock().expect("lock") = Some(msg);
