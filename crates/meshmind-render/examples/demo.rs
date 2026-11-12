@@ -19,7 +19,7 @@ fn main() {
     let drill = primitives::cylinder(0.15, 2.0, 32).transformed(&glam::Affine3A::from_rotation_x(
         std::f32::consts::FRAC_PI_2,
     ));
-    let body = csg::boolean(&body, &drill, BooleanOp::Difference);
+    let body = csg::boolean(&body, &drill, BooleanOp::Difference).unwrap();
     let id = scene.add_object("Crate", body).unwrap();
     let paint = scene.add_material(Material {
         name: "Paint".into(),

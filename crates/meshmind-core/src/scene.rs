@@ -2,6 +2,7 @@ use glam::{Affine3A, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::lighting::LightingPreset;
 use crate::material::{Material, MaterialId};
 use crate::poly::PolyMesh;
 
@@ -56,6 +57,9 @@ pub struct Scene {
     materials: Vec<(MaterialId, Material)>,
     next_object_id: ObjectId,
     next_material_id: MaterialId,
+    /// How the scene is lit in previews and the viewer.
+    #[serde(default)]
+    pub lighting: LightingPreset,
 }
 
 impl Default for Scene {
@@ -65,6 +69,7 @@ impl Default for Scene {
             materials: vec![(0, Material::default())],
             next_object_id: 1,
             next_material_id: 1,
+            lighting: LightingPreset::default(),
         }
     }
 }

@@ -18,11 +18,19 @@ pub struct Face {
     /// Smooth faces share normals with smooth neighbours; flat faces get a
     /// hard edge all around.
     pub smooth: bool,
+    /// Texture coordinates per corner, set by UV unwrapping. Empty when the
+    /// face has none; geometry edits clear them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uvs: Vec<Vec2>,
 }
 
 impl Face {
     pub fn new(verts: Vec<u32>, smooth: bool) -> Self {
-        Self { verts, smooth }
+        Self {
+            verts,
+            smooth,
+            uvs: Vec::new(),
+        }
     }
 
     /// Edges as (from, to) pairs in winding order.
@@ -46,6 +54,16 @@ impl PolyMesh {
 
     pub fn add_face(&mut self, verts: Vec<u32>, smooth: bool) {
         self.faces.push(Face::new(verts, smooth));
+    }
+
+    pub fn has_uvs(&self) -> bool {
+        !self.faces.is_empty() && self.faces.iter().all(|f| f.uvs.len() == f.verts.len())
+    }
+
+    pub fn clear_uvs(&mut self) {
+        for f in &mut self.faces {
+            f.uvs.clear();
+        }
     }
 
     pub fn face_count(&self) -> usize {
@@ -233,22 +251,32 @@ impl PolyMesh {
             }
         }
         let mut mesh = Mesh::default();
-        let mut shared: HashMap<u32, u32> = HashMap::new();
+        // Smooth corners share a vertex when position and UV match.
+        let mut shared: HashMap<(u32, u32, u32), u32> = HashMap::new();
         for (f, n) in self.faces.iter().zip(&normals) {
             let face_n = n.normalize_or_zero();
+            let has_uv = f.uvs.len() == f.verts.len();
             let mut idx = Vec::with_capacity(f.verts.len());
-            for &v in &f.verts {
+            for (k, &v) in f.verts.iter().enumerate() {
                 let p = self.positions[v as usize];
+                let uv = match (has_uv, f.smooth) {
+                    (true, _) => f.uvs[k],
+                    // Project by the shared vertex normal so smooth neighbours agree.
+                    (false, true) => box_uv(p, smooth_normals[v as usize]),
+                    (false, false) => box_uv(p, face_n),
+                };
                 let make = |mesh: &mut Mesh, normal: Vec3| {
                     mesh.positions.push(p);
                     mesh.normals.push(normal);
-                    mesh.uvs.push(box_uv(p, face_n));
+                    mesh.uvs.push(uv);
                     (mesh.positions.len() - 1) as u32
                 };
                 let i = if f.smooth {
-                    *shared.entry(v).or_insert_with(|| {
-                        make(&mut mesh, smooth_normals[v as usize].normalize_or_zero())
-                    })
+                    *shared
+                        .entry((v, uv.x.to_bits(), uv.y.to_bits()))
+                        .or_insert_with(|| {
+                            make(&mut mesh, smooth_normals[v as usize].normalize_or_zero())
+                        })
                 } else {
                     make(&mut mesh, face_n)
                 };

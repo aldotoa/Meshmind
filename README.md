@@ -5,7 +5,7 @@ builds it. MeshMind is an open-source modelling engine that AI agents drive
 through [MCP](https://modelcontextprotocol.io), so you get game-ready assets
 without learning a complex 3D tool, and without paying for another AI service.
 
-> Status: early development (step 2 of 4). Not ready for production use yet.
+> Status: early development (step 3 of 4). Not ready for production use yet.
 > "MeshMind" is a working name.
 
 ## Why
@@ -21,8 +21,9 @@ without learning a complex 3D tool, and without paying for another AI service.
 
 ### With the desktop app (recommended)
 
-Requires Rust and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
-for your platform.
+Requires Rust, CMake and a C++ compiler (for the Manifold boolean library),
+plus the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for
+your platform.
 
 ```sh
 cargo run --release -p meshmind-desktop
@@ -55,9 +56,9 @@ The agent can still see its work through the `render_preview` tool.
 | Create | `create_primitive` (cube, plane, sphere, cylinder, cone, torus) |
 | Edit | `extrude`, `inset`, `bevel`, `subdivide`, `boolean` (union, difference, intersection), `mirror`, `array`, `set_shading` |
 | Scene | `list_objects`, `get_object`, `set_transform`, `duplicate_object`, `delete_object`, `clear_scene`, `undo`, `redo` |
-| Look | `set_material` (PBR metallic-roughness) |
+| Look | `apply_smart_material` (painted_metal, bare_metal, rusty_metal, plastic, wood, stone, rubber: edge wear, dirt, colour variation and normal maps baked from the shape), `set_material` (plain PBR), `unwrap_uvs`, `set_lighting` (studio, outdoor, sunset, night) |
 | Review | `render_preview` returns a multi-angle image the agent can look at |
-| Output | `export_glb` (glTF 2.0, opens in Unity, Unreal, Godot, Blender) |
+| Output | `export_glb` (glTF 2.0 with embedded textures; opens in Unity, Unreal, Godot, Blender) |
 
 Faces can be picked by world direction (`{"facing": "+y"}`), all at once, or by index.
 
@@ -65,7 +66,7 @@ Faces can be picked by world direction (`{"facing": "+y"}`), all at once, or by 
 
 | Path | What it is |
 |---|---|
-| `crates/meshmind-core` | Engine: scene, polygon meshes, modelling ops, booleans, PBR materials, glTF export |
+| `crates/meshmind-core` | Engine: scene, polygon meshes, modelling ops, Manifold booleans, UV unwrapping, smart material baking, glTF export |
 | `crates/meshmind-mcp` | MCP server exposing the engine as agent tools (stdio and HTTP) |
 | `crates/meshmind-render` | CPU preview renderer used by `render_preview` |
 | `apps/desktop` | Tauri desktop app: live viewer and review UI |
@@ -81,4 +82,4 @@ cargo fmt --all
 
 ## License
 
-MIT. See [LICENSE](LICENSE). The desktop app bundles [three.js](https://threejs.org) (MIT).
+MIT. See [LICENSE](LICENSE). The desktop app bundles [three.js](https://threejs.org) (MIT); booleans use [Manifold](https://github.com/elalish/manifold) (Apache-2.0).

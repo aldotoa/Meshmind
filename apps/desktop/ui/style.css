@@ -28,3 +28,4 @@ button.ghost { background: #2a2a38; color: var(--text); }
 button.ghost:hover { background: #34344a; }
 button.on { background: var(--accent); }
 .error { color: #ff8a8a; }
+select { background: #2a2a38; color: var(--text); border: 0; border-radius: 6px; padding: 6px 8px; font: inherit; }

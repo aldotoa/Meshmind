@@ -20,30 +20,50 @@ pub fn to_glb(scene: &Scene) -> Vec<u8> {
     let mut meshes: Vec<Value> = Vec::new();
     let mut nodes: Vec<Value> = Vec::new();
 
-    let mut material_index: HashMap<u32, usize> = HashMap::new();
-    let mut materials: Vec<Value> = Vec::new();
-    for (id, m) in scene.materials() {
-        material_index.insert(id, materials.len());
-        materials.push(json!({
-            "name": m.name,
-            "pbrMetallicRoughness": {
-                "baseColorFactor": m.base_color,
-                "metallicFactor": m.metallic,
-                "roughnessFactor": m.roughness,
-            },
-            "emissiveFactor": m.emissive,
-            "alphaMode": if m.base_color[3] < 1.0 { "BLEND" } else { "OPAQUE" },
-        }));
-    }
-
-    let mut push_view = |bin: &mut Vec<u8>, bytes: &[u8], target: u32| -> usize {
+    let mut push_view = |bin: &mut Vec<u8>, bytes: &[u8], target: Option<u32>| -> usize {
         while bin.len() % 4 != 0 {
             bin.push(0);
         }
-        views.push(json!({ "buffer": 0, "byteOffset": bin.len(), "byteLength": bytes.len(), "target": target }));
+        let mut view = json!({ "buffer": 0, "byteOffset": bin.len(), "byteLength": bytes.len() });
+        if let Some(t) = target {
+            view["target"] = json!(t);
+        }
+        views.push(view);
         bin.extend_from_slice(bytes);
         views.len() - 1
     };
+
+    let mut material_index: HashMap<u32, usize> = HashMap::new();
+    let mut materials: Vec<Value> = Vec::new();
+    let mut images: Vec<Value> = Vec::new();
+    let mut textures: Vec<Value> = Vec::new();
+    for (id, m) in scene.materials() {
+        material_index.insert(id, materials.len());
+        let mut pbr = json!({
+            "baseColorFactor": m.base_color,
+            "metallicFactor": m.metallic,
+            "roughnessFactor": m.roughness,
+        });
+        let mut mat = json!({
+            "name": m.name,
+            "emissiveFactor": m.emissive,
+            "alphaMode": if m.base_color[3] < 1.0 { "BLEND" } else { "OPAQUE" },
+        });
+        if let Some(tex) = &m.textures {
+            let mut add = |t: &crate::texture::Texture, suffix: &str| -> usize {
+                let view = push_view(&mut bin, &t.to_png(), None);
+                images.push(json!({ "name": format!("{}_{suffix}", m.name), "bufferView": view, "mimeType": "image/png" }));
+                textures.push(json!({ "source": images.len() - 1, "sampler": 0 }));
+                textures.len() - 1
+            };
+            pbr["baseColorTexture"] = json!({ "index": add(&tex.base_color, "base_color") });
+            pbr["metallicRoughnessTexture"] =
+                json!({ "index": add(&tex.metallic_roughness, "metallic_roughness") });
+            mat["normalTexture"] = json!({ "index": add(&tex.normal, "normal") });
+        }
+        mat["pbrMetallicRoughness"] = pbr;
+        materials.push(mat);
+    }
 
     for obj in scene.objects() {
         let mesh = obj.mesh.to_mesh();
@@ -60,20 +80,20 @@ pub fn to_glb(scene: &Scene) -> Vec<u8> {
         let count = mesh.positions.len();
 
         let base = accessors.len();
-        let v = push_view(&mut bin, &pos, ARRAY_BUFFER);
+        let v = push_view(&mut bin, &pos, Some(ARRAY_BUFFER));
         accessors.push(
             json!({ "bufferView": v, "componentType": FLOAT, "count": count, "type": "VEC3",
             "min": bounds.min.to_array(), "max": bounds.max.to_array() }),
         );
-        let v = push_view(&mut bin, &nrm, ARRAY_BUFFER);
+        let v = push_view(&mut bin, &nrm, Some(ARRAY_BUFFER));
         accessors.push(
             json!({ "bufferView": v, "componentType": FLOAT, "count": count, "type": "VEC3" }),
         );
-        let v = push_view(&mut bin, &uv, ARRAY_BUFFER);
+        let v = push_view(&mut bin, &uv, Some(ARRAY_BUFFER));
         accessors.push(
             json!({ "bufferView": v, "componentType": FLOAT, "count": count, "type": "VEC2" }),
         );
-        let v = push_view(&mut bin, &idx, ELEMENT_ARRAY_BUFFER);
+        let v = push_view(&mut bin, &idx, Some(ELEMENT_ARRAY_BUFFER));
         accessors.push(json!({ "bufferView": v, "componentType": UNSIGNED_INT, "count": mesh.indices.len(), "type": "SCALAR" }));
 
         meshes.push(json!({
@@ -107,6 +127,12 @@ pub fn to_glb(scene: &Scene) -> Vec<u8> {
         "accessors": accessors,
         "bufferViews": views,
     });
+    if !images.is_empty() {
+        doc["images"] = json!(images);
+        doc["textures"] = json!(textures);
+        // Linear filtering with mipmaps.
+        doc["samplers"] = json!([{ "magFilter": 9729, "minFilter": 9987 }]);
+    }
     if !bin.is_empty() {
         doc["buffers"] = json!([{ "byteLength": bin.len() }]);
     }
@@ -157,6 +183,37 @@ mod tests {
         assert_eq!(prim.material().name(), Some("Red"));
         let reader = prim.reader(|b| Some(&buffers[b.index()]));
         assert_eq!(reader.read_indices().unwrap().into_u32().count(), 36);
+    }
+
+    #[test]
+    fn baked_textures_are_embedded() {
+        use crate::material::MaterialTextures;
+        use std::sync::Arc;
+        let mut scene = Scene::new();
+        let id = scene.add_object("Box", cube(1.0)).unwrap();
+        let tex = |name: &str| crate::texture::Texture::new(name, 8, 8);
+        let m = scene.add_material(Material {
+            name: "Painted".into(),
+            textures: Some(Arc::new(MaterialTextures {
+                base_color: tex("a"),
+                metallic_roughness: tex("b"),
+                normal: tex("c"),
+            })),
+            ..Default::default()
+        });
+        scene.assign_material(id, m).unwrap();
+        let (doc, _, images) = gltf::import_slice(to_glb(&scene)).expect("valid glb");
+        assert_eq!(images.len(), 3);
+        let mat = doc
+            .materials()
+            .find(|m| m.name() == Some("Painted"))
+            .unwrap();
+        assert!(mat.pbr_metallic_roughness().base_color_texture().is_some());
+        assert!(mat
+            .pbr_metallic_roughness()
+            .metallic_roughness_texture()
+            .is_some());
+        assert!(mat.normal_texture().is_some());
     }
 
     #[test]

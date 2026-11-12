@@ -1,7 +1,14 @@
 //! Tool definitions and handlers. Descriptions are written for a model to read.
 
 use glam::{EulerRot, Quat, Vec3};
-use meshmind_core::{csg, export, ops, Axis, BooleanOp, Material, Primitive, Scene, Selection};
+use std::sync::Arc;
+
+use meshmind_core::smart::{self, Preset, SmartMaterial};
+use meshmind_core::uv::{self, UnwrapOptions};
+use meshmind_core::{
+    csg, export, ops, Axis, BooleanOp, LightingPreset, Material, MaterialTextures, Primitive,
+    Scene, Selection,
+};
 use meshmind_render::{render_sheet, View};
 use serde_json::{json, Value};
 
@@ -100,8 +107,10 @@ pub fn definitions() -> Value {
                     "distance": { "type": "number", "description": "Metres, in the object's local scale." } }),
             &["id", "faces", "distance"]),
         tool("inset",
-            "Shrink each selected face towards its centre, leaving a border ring. Follow with a \
-             small negative extrude for panel lines and recesses, or positive for raised panels.",
+            "Shrink each selected face towards its centre, leaving a border ring. Returns \
+             inner_faces: extrude exactly those (pass the list as `faces`) by a small negative \
+             distance for recessed panels, or positive for raised ones. Selecting by direction again \
+             would also catch the ring.",
             json!({ "id": id_prop(), "faces": faces_schema(),
                     "amount": { "type": "number", "description": "0 to 1: fraction of the way to the centre. Typical 0.1 to 0.3." } }),
             &["id", "faces", "amount"]),
@@ -154,6 +163,34 @@ pub fn definitions() -> Value {
                     "roughness": { "type": "number", "minimum": 0, "maximum": 1 },
                     "emissive": vec3_schema("Glow color, linear RGB. Values above 1 glow brighter.") }),
             &["id"]),
+        tool("unwrap_uvs",
+            "Lay the object's surface flat into texture space (UV unwrapping). apply_smart_material \
+             does this automatically; call it yourself only to re-unwrap. Any geometry edit clears UVs.",
+            json!({ "id": id_prop() }), &["id"]),
+        tool("apply_smart_material",
+            "Give an object a realistic, textured material in one step: the surface is unwrapped and \
+             textures are generated from its shape. Paint chips off convex edges, dirt and rust \
+             collect in creases, colour varies naturally and fine bumps go into a normal map. This is \
+             the main way to get an AAA look; plain set_material looks like clean CG. Do it after the \
+             shape is final (geometry edits make the textures outdated). Bevel hard edges first: wear \
+             follows them.",
+            json!({ "id": id_prop(),
+                    "preset": { "type": "string", "enum": Preset::ALL.map(|p| p.name()),
+                        "description": "painted_metal (paint over metal), bare_metal, rusty_metal, plastic, wood, stone (also concrete), rubber." },
+                    "color": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3,
+                        "description": "Main colour, linear RGB 0 to 1 (paint colour for painted_metal). Defaults to the preset's." },
+                    "wear": { "type": "number", "minimum": 0, "maximum": 1, "description": "Edge wear: 0 new, 0.3 used, 0.7 battered. Default 0.4." },
+                    "dirt": { "type": "number", "minimum": 0, "maximum": 1, "description": "Grime in creases and dust: 0 clean, 1 filthy. Default 0.3." },
+                    "scale": { "type": "number", "description": "Size of patterns (blotches, wood grain) in metres. Default 0.15." },
+                    "seed": { "type": "integer", "description": "Change for a different random pattern." },
+                    "resolution": { "type": "integer", "enum": [256, 512, 1024, 2048], "description": "Texture size. Default 1024." } }),
+            &["id", "preset"]),
+        tool("set_lighting",
+            "Choose the lighting for previews and the viewer: studio (neutral, best for judging), \
+             outdoor (sun and sky), sunset (warm, dramatic), night (cool, dim). Check important \
+             models under more than one.",
+            json!({ "preset": { "type": "string", "enum": LightingPreset::ALL.map(|p| p.name()) } }),
+            &["preset"]),
         tool("render_preview",
             "Render the scene and return an image so you can check your work. Use it after every \
              few edits and fix what looks wrong. Default views: front, right, top and three_quarter \
@@ -192,13 +229,11 @@ pub fn call(scene: &mut Scene, name: &str, args: &Value) -> Option<Result<ToolOu
             }
             Ok(json!({ "deleted": ids.len() }).into())
         }
-        "extrude" => edit(scene, args, |m, local, a| {
-            let sel = selection(a, local)?;
-            ops::extrude(m, &sel, number(a, "distance")?)
+        "extrude" => selection_edit(scene, args, "extruded_faces", |m, sel, a| {
+            ops::extrude(m, sel, number(a, "distance")?)
         }),
-        "inset" => edit(scene, args, |m, local, a| {
-            let sel = selection(a, local)?;
-            ops::inset(m, &sel, number(a, "amount")?)
+        "inset" => selection_edit(scene, args, "inner_faces", |m, sel, a| {
+            ops::inset(m, sel, number(a, "amount")?)
         }),
         "bevel" => edit(scene, args, |m, _, a| {
             let angle = a.get("angle").and_then(Value::as_f64).unwrap_or(30.0) as f32;
@@ -247,6 +282,20 @@ pub fn call(scene: &mut Scene, name: &str, args: &Value) -> Option<Result<ToolOu
         }),
         "boolean" => boolean(scene, args).map(Into::into),
         "set_material" => set_material(scene, args).map(Into::into),
+        "unwrap_uvs" => unwrap_uvs(scene, args).map(Into::into),
+        "apply_smart_material" => apply_smart_material(scene, args).map(Into::into),
+        "set_lighting" => {
+            let name = args
+                .get("preset")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            LightingPreset::from_name(name)
+                .ok_or(format!("unknown lighting preset `{name}`"))
+                .map(|p| {
+                    scene.lighting = p;
+                    json!({ "lighting": p.name() }).into()
+                })
+        }
         "render_preview" => render_preview(scene, args),
         "export_glb" => export_glb(scene, args).map(Into::into),
         _ => return None,
@@ -373,6 +422,44 @@ fn selection(args: &Value, world_to_local: glam::Mat3) -> Result<Selection, Stri
 }
 
 /// Apply a mesh operation to the object named by `id`.
+/// Like [`edit`] for operations on a face selection. Both extrude and inset
+/// keep the selected faces' indices, so the result lists them under `key`
+/// for the agent to chain the next step precisely (inset, then extrude the
+/// inner faces only).
+fn selection_edit(
+    scene: &mut Scene,
+    args: &Value,
+    key: &str,
+    op: impl FnOnce(
+        &meshmind_core::PolyMesh,
+        &Selection,
+        &Value,
+    ) -> Result<meshmind_core::PolyMesh, String>,
+) -> Result<ToolOutput, String> {
+    let id = object_id(args, "id")?;
+    let obj = scene.object(id).map_err(|e| e.to_string())?;
+    let world_to_local = glam::Mat3::from(obj.transform.matrix().matrix3).transpose();
+    let sel = selection(args, world_to_local)?;
+    let indices: Vec<usize> = sel
+        .resolve(&obj.mesh)
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| **s)
+        .map(|(i, _)| i)
+        .collect();
+    let mut out = edit(scene, args, |m, _, a| {
+        op(
+            m,
+            &Selection::Faces {
+                indices: indices.clone(),
+            },
+            a,
+        )
+    })?;
+    out.data[key] = json!(indices);
+    Ok(out)
+}
+
 fn edit(
     scene: &mut Scene,
     args: &Value,
@@ -386,10 +473,19 @@ fn edit(
     let obj = scene.object(id).map_err(|e| e.to_string())?;
     // Normals transform by the inverse transpose, so world -> local uses the transpose.
     let world_to_local = glam::Mat3::from(obj.transform.matrix().matrix3).transpose();
-    let mesh = op(&obj.mesh, world_to_local, args)?;
+    let mut mesh = op(&obj.mesh, world_to_local, args)?;
+    // The shape changed, so any UV layout no longer fits.
+    mesh.clear_uvs();
+    let textured = scene
+        .material(obj.material)
+        .is_ok_and(|m| m.textures.is_some());
     let faces = mesh.faces.len();
     scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
-    Ok(json!({ "id": id, "faces": faces }).into())
+    let mut out = json!({ "id": id, "faces": faces });
+    if textured {
+        out["note"] = json!("This object's baked textures no longer match its shape. Call apply_smart_material again when the shape is final.");
+    }
+    Ok(out.into())
 }
 
 fn create_primitive(scene: &mut Scene, args: &Value) -> Result<Value, String> {
@@ -539,7 +635,7 @@ fn boolean(scene: &mut Scene, args: &Value) -> Result<Value, String> {
     // Work in the target's local space.
     let target_m = t.transform.matrix();
     let tool_in_target = target_m.inverse() * b.transform.matrix();
-    let result = csg::boolean(&t.mesh, &b.mesh.transformed(&tool_in_target), op);
+    let result = csg::boolean(&t.mesh, &b.mesh.transformed(&tool_in_target), op)?;
     if result.faces.is_empty() {
         return Err("the result is empty (do the objects overlap?)".into());
     }
@@ -621,4 +717,78 @@ fn export_glb(scene: &Scene, args: &Value) -> Result<Value, String> {
         .map(|p| p.display().to_string())
         .unwrap_or(path.to_string());
     Ok(json!({ "path": abs, "bytes": bytes.len(), "objects": scene.objects().len() }))
+}
+
+fn unwrap_uvs(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let id = object_id(args, "id")?;
+    let mut mesh = scene.object(id).map_err(|e| e.to_string())?.mesh.clone();
+    let stats = uv::unwrap(&mut mesh, &UnwrapOptions::default())?;
+    scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
+    Ok(
+        json!({ "id": id, "charts": stats.charts, "coverage": (stats.coverage * 100.0).round() / 100.0 }),
+    )
+}
+
+fn apply_smart_material(scene: &mut Scene, args: &Value) -> Result<Value, String> {
+    let id = object_id(args, "id")?;
+    let name = args
+        .get("preset")
+        .and_then(Value::as_str)
+        .ok_or("`preset` is required")?;
+    let preset = Preset::from_name(name).ok_or(format!(
+        "unknown preset `{name}`; use one of {}",
+        Preset::ALL.map(|p| p.name()).join(", ")
+    ))?;
+    let mut sm = SmartMaterial::new(preset);
+    if let Some(c) = floats::<3>(args, "color")? {
+        sm.color = Some(c.map(|v| v.clamp(0.0, 1.0)));
+    }
+    if let Some(v) = args.get("wear").and_then(Value::as_f64) {
+        sm.wear = (v as f32).clamp(0.0, 1.0);
+    }
+    if let Some(v) = args.get("dirt").and_then(Value::as_f64) {
+        sm.dirt = (v as f32).clamp(0.0, 1.0);
+    }
+    if let Some(v) = args.get("scale").and_then(Value::as_f64) {
+        sm.scale = (v as f32).clamp(0.005, 10.0);
+    }
+    if let Some(v) = args.get("seed").and_then(Value::as_u64) {
+        sm.seed = v as u32;
+    }
+    let resolution = args
+        .get("resolution")
+        .and_then(Value::as_u64)
+        .unwrap_or(1024) as u32;
+    if ![256, 512, 1024, 2048].contains(&resolution) {
+        return Err("`resolution` must be 256, 512, 1024 or 2048".into());
+    }
+
+    let obj = scene.object(id).map_err(|e| e.to_string())?;
+    let mut mesh = obj.mesh.clone();
+    let mut unwrapped = false;
+    if !mesh.has_uvs() {
+        uv::unwrap(&mut mesh, &UnwrapOptions::default())?;
+        unwrapped = true;
+    }
+    let baked = smart::bake(&mesh, &sm, resolution)?;
+    let material_name = format!("{} ({})", obj.name, preset.name());
+    scene.set_mesh(id, mesh).map_err(|e| e.to_string())?;
+    let material = scene.add_material(Material {
+        name: material_name,
+        base_color: [1.0; 4],
+        metallic: 1.0,
+        roughness: 1.0,
+        textures: Some(Arc::new(MaterialTextures {
+            base_color: baked.base_color,
+            metallic_roughness: baked.metallic_roughness,
+            normal: baked.normal,
+        })),
+        ..Default::default()
+    });
+    scene
+        .assign_material(id, material)
+        .map_err(|e| e.to_string())?;
+    Ok(
+        json!({ "id": id, "material": material, "preset": preset.name(), "resolution": resolution, "unwrapped": unwrapped }),
+    )
 }

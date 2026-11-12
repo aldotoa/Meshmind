@@ -256,3 +256,87 @@ fn http_transport() {
     assert_eq!(*changes.lock().unwrap(), vec![1]);
     assert_eq!(server.lock().unwrap().scene.objects().len(), 1);
 }
+
+#[test]
+fn smart_material_lighting_and_textured_export() {
+    let mut s = Server::new();
+    let id = create(&mut s, json!({ "shape": "cube" }));
+    call(&mut s, "bevel", json!({ "id": id, "amount": 0.03 }));
+    let r = call(
+        &mut s,
+        "apply_smart_material",
+        json!({ "id": id, "preset": "painted_metal", "color": [0.1, 0.2, 0.05], "wear": 0.6, "resolution": 256 }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    assert_eq!(r["structuredContent"]["unwrapped"], true);
+    let obj = s.scene.object(id as u32).unwrap();
+    assert!(obj.mesh.has_uvs());
+    assert!(s.scene.material(obj.material).unwrap().textures.is_some());
+
+    let r = call(&mut s, "set_lighting", json!({ "preset": "sunset" }));
+    assert_eq!(r["isError"], false, "{r}");
+    let r = call(
+        &mut s,
+        "render_preview",
+        json!({ "size": 128, "views": ["three_quarter"] }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+
+    let path = std::env::temp_dir().join(format!("meshmind-tex-{}.glb", std::process::id()));
+    call(
+        &mut s,
+        "export_glb",
+        json!({ "path": path.to_str().unwrap() }),
+    );
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert!(
+        bytes.len() > 50_000,
+        "textures should be embedded ({} bytes)",
+        bytes.len()
+    );
+
+    // Editing the shape afterwards clears UVs and warns that textures are stale.
+    let r = call(
+        &mut s,
+        "extrude",
+        json!({ "id": id, "faces": { "facing": "+y" }, "distance": 0.1 }),
+    );
+    assert!(r["structuredContent"]["note"]
+        .as_str()
+        .unwrap()
+        .contains("apply_smart_material"));
+    assert!(!s.scene.object(id as u32).unwrap().mesh.has_uvs());
+
+    let r = call(
+        &mut s,
+        "apply_smart_material",
+        json!({ "id": id, "preset": "chocolate" }),
+    );
+    assert_eq!(r["isError"], true);
+}
+
+#[test]
+fn inset_returns_inner_faces_for_a_real_recess() {
+    let mut s = Server::new();
+    let id = create(&mut s, json!({ "shape": "cube" }));
+    let r = call(
+        &mut s,
+        "inset",
+        json!({ "id": id, "faces": { "facing": "+z" }, "amount": 0.2 }),
+    );
+    let inner = r["structuredContent"]["inner_faces"].clone();
+    assert_eq!(inner.as_array().unwrap().len(), 1);
+    call(
+        &mut s,
+        "extrude",
+        json!({ "id": id, "faces": inner, "distance": -0.1 }),
+    );
+    let mesh = &s.scene.object(id as u32).unwrap().mesh;
+    // Only the inner 0.8 x 0.8 panel went in 0.1, so the volume drops by 0.064.
+    assert!(
+        (mesh.volume() - (1.0 - 0.064)).abs() < 1e-4,
+        "{}",
+        mesh.volume()
+    );
+}

@@ -4,8 +4,9 @@
 //! on the CPU, so it works on every machine and in CI with no GPU, and the same
 //! scene always gives the same image.
 
-use glam::{Mat4, Vec3, Vec4, Vec4Swizzles};
-use meshmind_core::{Material, Scene};
+use glam::{Mat4, Vec2, Vec3, Vec4, Vec4Swizzles};
+use meshmind_core::texture::srgb_to_linear;
+use meshmind_core::{LightingParams, Material, Scene};
 
 /// A named camera direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +97,10 @@ impl Image {
 struct Tri {
     world: [Vec3; 3],
     normal: [Vec3; 3],
+    uv: [Vec2; 3],
+    /// World-space tangent and bitangent from the UV layout, for normal maps.
+    tangent: Vec3,
+    bitangent: Vec3,
     material: usize,
 }
 
@@ -125,19 +130,32 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
                 lo = lo.min(p);
                 hi = hi.max(p);
             }
+            let uv = idx.map(|i| mesh.uvs[i]);
+            let (e1, e2) = (world[1] - world[0], world[2] - world[0]);
+            let (d1, d2) = (uv[1] - uv[0], uv[2] - uv[0]);
+            let det = d1.x * d2.y - d2.x * d1.y;
+            let (tangent, bitangent) = if det.abs() > 1e-12 {
+                ((e1 * d2.y - e2 * d1.y) / det, (e2 * d1.x - e1 * d2.x) / det)
+            } else {
+                (Vec3::ZERO, Vec3::ZERO)
+            };
             tris.push(Tri {
                 world,
                 normal,
+                uv,
+                tangent,
+                bitangent,
                 material: mat,
             });
         }
     }
 
+    let light = scene.lighting.params();
     let mut color = vec![Vec3::ZERO; (n * n) as usize];
     // Background: soft vertical gradient.
     for y in 0..n {
         let t = y as f32 / n as f32;
-        let c = Vec3::new(0.16, 0.17, 0.2).lerp(Vec3::new(0.05, 0.05, 0.06), t);
+        let c = Vec3::from(light.background_top).lerp(Vec3::from(light.background_bottom), t);
         for x in 0..n {
             color[(y * n + x) as usize] = c;
         }
@@ -162,7 +180,7 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
         // Lights follow the camera so every view is readable.
         let cam_to_world = view_m.inverse();
         let key = cam_to_world
-            .transform_vector3(Vec3::new(-0.5, 0.7, 0.6))
+            .transform_vector3(Vec3::from(light.key_direction))
             .normalize();
         let fill = cam_to_world
             .transform_vector3(Vec3::new(0.7, 0.1, 0.4))
@@ -221,11 +239,42 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
                     let pos = (tri.world[0] * a + tri.world[1] * b + tri.world[2] * c) / s;
                     let mut nrm = ((tri.normal[0] * a + tri.normal[1] * b + tri.normal[2] * c) / s)
                         .normalize_or_zero();
+                    let uv = (tri.uv[0] * a + tri.uv[1] * b + tri.uv[2] * c) / s;
                     let to_eye = (eye - pos).normalize();
                     if nrm.dot(to_eye) < 0.0 {
                         nrm = -nrm; // show back faces of open meshes
                     }
-                    color[i] = shade(mat, nrm, to_eye, key, fill);
+                    let mut surface = Surface {
+                        base: Vec3::new(mat.base_color[0], mat.base_color[1], mat.base_color[2]),
+                        metallic: mat.metallic,
+                        roughness: mat.roughness,
+                    };
+                    if let Some(tex) = &mat.textures {
+                        let b = tex.base_color.sample(uv);
+                        surface.base *= Vec3::new(
+                            srgb_to_linear(b.x),
+                            srgb_to_linear(b.y),
+                            srgb_to_linear(b.z),
+                        );
+                        let mr = tex.metallic_roughness.sample(uv);
+                        surface.roughness *= mr.y;
+                        surface.metallic *= mr.z;
+                        let tn = tex.normal.sample(uv).xyz() * 2.0 - Vec3::ONE;
+                        // Gram-Schmidt the UV tangent frame against the shading normal.
+                        let t = (tri.tangent - nrm * nrm.dot(tri.tangent)).normalize_or_zero();
+                        if t != Vec3::ZERO {
+                            let sign = if nrm.cross(t).dot(tri.bitangent) < 0.0 {
+                                -1.0
+                            } else {
+                                1.0
+                            };
+                            // Green points to the top of the image, i.e. towards smaller v.
+                            let bt = -nrm.cross(t) * sign;
+                            nrm = (t * tn.x + bt * tn.y + nrm * tn.z).normalize_or(nrm);
+                        }
+                    }
+                    color[i] =
+                        shade(&surface, &light, nrm, to_eye, key, fill) + Vec3::from(mat.emissive);
                 }
             }
         }
@@ -254,25 +303,51 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
     img
 }
 
-fn shade(m: &Material, n: Vec3, v: Vec3, key: Vec3, fill: Vec3) -> Vec3 {
-    let base = Vec3::new(m.base_color[0], m.base_color[1], m.base_color[2]);
+struct Surface {
+    base: Vec3,
+    metallic: f32,
+    roughness: f32,
+}
+
+/// Sky seen in direction `d`: used for ambient light and reflections.
+fn environment(light: &LightingParams, d: Vec3) -> Vec3 {
+    let sky = Vec3::from(light.sky);
+    let ground = Vec3::from(light.ground);
+    let horizon = (sky + ground) * 0.5 + Vec3::splat(0.08);
+    let t = d.y.clamp(-1.0, 1.0);
+    let c = if t > 0.0 {
+        horizon.lerp(sky, t.powf(0.6))
+    } else {
+        horizon.lerp(ground, (-t).powf(0.4))
+    };
+    c * light.ambient_intensity * 2.2
+}
+
+fn shade(m: &Surface, light: &LightingParams, n: Vec3, v: Vec3, key: Vec3, fill: Vec3) -> Vec3 {
+    let base = m.base;
     let metallic = m.metallic.clamp(0.0, 1.0);
     let rough = m.roughness.clamp(0.04, 1.0);
     let diffuse = base * (1.0 - metallic);
     let f0 = Vec3::splat(0.04).lerp(base, metallic);
 
     // Sky/ground hemisphere ambient.
-    let sky = Vec3::new(0.55, 0.6, 0.7);
-    let ground = Vec3::new(0.2, 0.18, 0.16);
-    let ambient = ground.lerp(sky, n.y * 0.5 + 0.5) * 0.45;
+    let sky = Vec3::from(light.sky);
+    let ground = Vec3::from(light.ground);
+    let ambient = ground.lerp(sky, n.y * 0.5 + 0.5) * light.ambient_intensity;
 
     let mut out = diffuse * ambient;
     let n_dot_v = n.dot(v).max(0.0);
+    // Reflection of the environment, blurred towards the ambient average by roughness.
+    let r = (2.0 * n.dot(v) * n - v).normalize_or(n);
+    let env = environment(light, r).lerp(ambient * 1.6, rough * rough);
     let fresnel_env = f0 + (Vec3::ONE - f0) * (1.0 - n_dot_v).powi(5) * (1.0 - rough);
-    out += fresnel_env * ambient * 2.2;
+    out += fresnel_env * env;
 
     let shininess = (2.0 / (rough * rough * rough * rough) - 2.0).clamp(1.0, 2048.0);
-    for (l, intensity) in [(key, 2.0f32), (fill, 0.5)] {
+    for (l, color, intensity) in [
+        (key, Vec3::from(light.key_color), light.key_intensity),
+        (fill, Vec3::from(light.fill_color), light.fill_intensity),
+    ] {
         let n_dot_l = n.dot(l).max(0.0);
         if n_dot_l <= 0.0 {
             continue;
@@ -281,11 +356,11 @@ fn shade(m: &Material, n: Vec3, v: Vec3, key: Vec3, fill: Vec3) -> Vec3 {
         let spec =
             n.dot(h).max(0.0).powf(shininess) * (shininess + 8.0) / (8.0 * std::f32::consts::PI);
         let fresnel = f0 + (Vec3::ONE - f0) * (1.0 - h.dot(v).max(0.0)).powi(5);
-        out += (diffuse * 0.75 + fresnel * spec) * n_dot_l * intensity;
+        out += (diffuse * 0.75 + fresnel * spec) * n_dot_l * intensity * color;
     }
     // Rim light to separate the silhouette from the background.
     out += Vec3::splat((1.0 - n_dot_v).powi(3) * 0.15);
-    out + Vec3::from(m.emissive)
+    out * light.exposure
 }
 
 fn tone_map(c: Vec3) -> Vec3 {

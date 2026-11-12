@@ -56,7 +56,7 @@ watches, reviews, and steers.
 | `crates/meshmind-core` | Pure Rust engine with no UI: scene graph, meshes, PBR materials, mesh operations, undo stack, glTF/FBX/OBJ export. Fully unit-tested. |
 | `crates/meshmind-mcp` | MCP server. Exposes core operations as tools. Runs standalone (`meshmind-mcp` binary over stdio) or embedded in the desktop app. |
 | `apps/desktop` | Tauri v2 app. Embeds the MCP server (HTTP on `127.0.0.1:7878`), shows the live scene with three.js (PBR, soft shadows, environment lighting), and lets the person undo and redo. |
-| `crates/meshmind-render` | CPU software renderer used by `render_preview`. Needs no GPU, so it works in CI and on any machine. A GPU path for texture baking may follow in step 3. |
+| `crates/meshmind-render` | CPU software renderer used by `render_preview`, with textures, normal maps, environment reflections and the lighting presets. Needs no GPU, so it works in CI and on any machine. |
 | `plugins/*` *(step 3)* | Optional extras, such as local image-to-3D models (TRELLIS, Hunyuan3D) for a fast rough first shape. |
 
 ## How an agent connects
@@ -86,18 +86,36 @@ watches, reviews, and steers.
   flagged smooth or flat. All modelling ops work on it and return a new
   mesh, which makes undo simple (scene snapshots).
 - **Mesh**: triangles with normals and UVs, derived from the PolyMesh for
-  rendering and export. UVs are a box projection until step 3's unwrapping.
+  rendering and export. Faces carry unwrapped UVs when they have them, and a
+  box projection otherwise.
 - **Material**: metallic-roughness PBR, matching glTF 2.0, so exports open
   correctly in Unity, Unreal, Godot, and Blender.
 
-## Known limitations (step 2)
+## How the AAA look is produced (step 3)
 
-- `bevel` rounds hard edges with 1 to 16 segments and stays watertight where
-  hard and soft edges meet. Concave edges get the same arc profile, which is a
-  close approximation rather than a true fillet.
-- `boolean` (BSP, after csg.js) needs closed inputs and can produce thin
-  slivers; results are welded but not retopologised.
-- The software preview has no shadows or reflections; the desktop viewer does.
+1. **Booleans** go through Manifold, so results are always watertight. Each
+   input face's index rides along as a vertex property, and coplanar
+   triangles from the result are merged back into clean polygons.
+2. **UV unwrapping** splits the surface into charts at hard edges, flattens
+   each onto its plane, and shelf-packs them at a uniform texel density.
+3. **Smart materials** are baked per texel from the shape: distance to
+   convex feature edges drives chipped edge wear, distance to concave edges
+   drives grime, upward faces collect dust, and 3D noise adds variation,
+   grain and rust. Output is glTF's base colour, metallic-roughness and an
+   OpenGL-convention normal map. Bevel strips count as edges, so bevel
+   before applying materials.
+4. **Lighting presets** are defined once in core and used by both the
+   preview renderer and the desktop viewer.
+
+## Known limitations
+
+- `bevel` arcs on concave edges approximate a true fillet.
+- UV charts are planar projections (up to 45° from the chart's normal), so
+  curved parts get more seams than a hand unwrap would.
+- Any geometry edit clears UVs; the agent must re-apply smart materials
+  once the shape is final (the tool result says so).
+- The software preview has no shadows; the desktop viewer does.
+- Image-to-3D plugins from the original step 3 plan are not built yet.
 
 ## Roadmap
 
@@ -105,6 +123,7 @@ watches, reviews, and steers.
    primitives, a working MCP server with basic scene tools, Tauri shell, CI.
 2. **Core engine and tools** (done): mesh editing ops, booleans, undo stack,
    glTF export, headless preview rendering, live viewer, HTTP transport.
-3. **AAA quality layer**: smart materials, UV unwrapping, baking, lighting,
-   optional image-to-3D plugins.
+3. **AAA quality layer** (done, except image-to-3D plugins): Manifold
+   booleans, UV unwrapping, smart materials baked to PBR textures, lighting
+   presets, textured glTF export.
 4. **Polish and launch**: docs, example prompts, signed releases, demo.

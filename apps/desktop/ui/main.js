@@ -32,6 +32,31 @@ sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.bias = -0.0005;
 scene.add(sun, sun.target);
 
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.4);
+scene.add(hemi);
+
+// Apply a lighting preset from the engine (same values the preview renderer uses).
+let currentLighting = null;
+function applyLighting(lighting) {
+  if (!lighting || lighting.name === currentLighting) return;
+  currentLighting = lighting.name;
+  const p = lighting.params;
+  const col = (c) => new THREE.Color(c[0], c[1], c[2]);
+  hemi.color = col(p.sky);
+  hemi.groundColor = col(p.ground);
+  hemi.intensity = p.ambient_intensity * 1.2;
+  sun.color = col(p.key_color);
+  sun.intensity = p.key_intensity * 1.2;
+  const d = new THREE.Vector3(...p.key_direction).normalize();
+  sunOffset.set(d.x * 8, Math.max(d.y, 0.15) * 10, d.z * 8);
+  scene.environmentIntensity = 0.35 + p.ambient_intensity;
+  scene.background = col(p.background_top).lerp(col(p.background_bottom), 0.6);
+  renderer.toneMappingExposure = p.exposure;
+  document.getElementById("lighting").value = lighting.name;
+  frameAll();
+}
+const sunOffset = new THREE.Vector3(4, 8, 5);
+
 const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.ShadowMaterial({ opacity: 0.35 }));
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
@@ -64,10 +89,33 @@ renderer.setAnimationLoop(() => {
 });
 
 // ---------- Scene sync ----------
-function buildObject(o) {
+// Baked textures, cached by material id (a material's textures never change).
+const textureCache = new Map();
+const loader = new THREE.TextureLoader();
+function loadTex(url, srgb) {
+  const t = loader.load(url);
+  t.flipY = false; // glTF convention: v = 0 is the top row
+  t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+async function texturesFor(materialId) {
+  if (!textureCache.has(materialId)) {
+    textureCache.set(materialId, invoke("material_textures", { materialId }).then((urls) =>
+      urls && {
+        map: loadTex(urls.base_color, true),
+        roughnessMap: loadTex(urls.metallic_roughness, false),
+        metalnessMap: loadTex(urls.metallic_roughness, false),
+        normalMap: loadTex(urls.normal, false),
+      }));
+  }
+  return textureCache.get(materialId);
+}
+async function buildObject(o) {
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(o.positions, 3));
   g.setAttribute("normal", new THREE.Float32BufferAttribute(o.normals, 3));
+  g.setAttribute("uv", new THREE.Float32BufferAttribute(o.uvs, 2));
   g.setIndex(o.indices);
   const m = o.material ?? {};
   const [r, gr, b, a] = m.base_color ?? [0.8, 0.8, 0.8, 1];
@@ -81,6 +129,16 @@ function buildObject(o) {
     side: THREE.DoubleSide,
     wireframe,
   });
+  if (o.textured) {
+    const tex = await texturesFor(o.material_id);
+    if (tex) {
+      Object.assign(mat, tex);
+      // glTF normal maps have +Y up in UV space, the reverse of three.js's default.
+      mat.normalScale = new THREE.Vector2(1, -1);
+      mat.side = THREE.FrontSide;
+      mat.needsUpdate = true;
+    }
+  }
   if (o.id === selectedId) mat.emissive.add(new THREE.Color(0.06, 0.04, 0.15));
   const mesh = new THREE.Mesh(g, mat);
   mesh.castShadow = mesh.receiveShadow = true;
@@ -103,7 +161,7 @@ function frameAll() {
   const s = Math.max(sphere.radius * 2, 2);
   Object.assign(sun.shadow.camera, { left: -s, right: s, top: s, bottom: -s, near: 0.1, far: 50 });
   sun.target.position.copy(sphere.center);
-  sun.position.copy(sphere.center).add(new THREE.Vector3(4, 8, 5));
+  sun.position.copy(sphere.center).add(sunOffset.clone().multiplyScalar(Math.max(sphere.radius, 1) / 4));
   sun.shadow.camera.updateProjectionMatrix();
 }
 
@@ -114,12 +172,14 @@ async function refresh() {
   refreshing = true;
   try {
     const snap = await invoke("scene_snapshot");
+    const built = await Promise.all(snap.objects.map(buildObject));
     for (const child of [...models.children]) {
       child.geometry.dispose();
-      child.material.dispose();
+      child.material.dispose(); // textures stay cached
       models.remove(child);
     }
-    for (const o of snap.objects) models.add(buildObject(o));
+    for (const m of built) models.add(m);
+    applyLighting(snap.lighting);
     renderList(snap.objects);
     const faces = snap.objects.reduce((n, o) => n + o.faces, 0);
     document.getElementById("stats").textContent =
@@ -173,6 +233,7 @@ async function tool(name, args = {}) {
 
 document.getElementById("undo").onclick = () => tool("undo");
 document.getElementById("redo").onclick = () => tool("redo");
+document.getElementById("lighting").onchange = (e) => tool("set_lighting", { preset: e.target.value });
 document.getElementById("frame").onclick = () => { userMovedCamera = false; frameAll(); };
 const wireBtn = document.getElementById("wire");
 wireBtn.onclick = () => {

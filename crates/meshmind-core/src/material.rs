@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
+
+use crate::texture::Texture;
 
 pub type MaterialId = u32;
 
@@ -13,6 +17,18 @@ pub struct Material {
     pub roughness: f32,
     /// Linear RGB emissive color.
     pub emissive: [f32; 3],
+    /// Baked textures (shared, so undo snapshots stay cheap). When present,
+    /// the factors above multiply them, as in glTF.
+    #[serde(skip)]
+    pub textures: Option<Arc<MaterialTextures>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaterialTextures {
+    pub base_color: Texture,
+    /// G = roughness, B = metallic.
+    pub metallic_roughness: Texture,
+    pub normal: Texture,
 }
 
 impl Default for Material {
@@ -23,6 +39,7 @@ impl Default for Material {
             metallic: 0.0,
             roughness: 0.5,
             emissive: [0.0; 3],
+            textures: None,
         }
     }
 }

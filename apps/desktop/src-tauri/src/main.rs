@@ -48,6 +48,9 @@ fn scene_snapshot(state: State<AppState>) -> Value {
                 "faces": o.mesh.faces.len(),
                 "positions": mesh.positions.iter().flat_map(|p| p.to_array()).collect::<Vec<f32>>(),
                 "normals": mesh.normals.iter().flat_map(|p| p.to_array()).collect::<Vec<f32>>(),
+                "uvs": mesh.uvs.iter().flat_map(|p| p.to_array()).collect::<Vec<f32>>(),
+                "material_id": o.material,
+                "textured": material.is_some_and(|m| m.textures.is_some()),
                 "indices": mesh.indices,
                 "translation": t.translation.to_array(),
                 "rotation": t.rotation.to_array(),
@@ -56,7 +59,40 @@ fn scene_snapshot(state: State<AppState>) -> Value {
             })
         })
         .collect();
-    json!({ "revision": s.revision, "objects": objects })
+    let lighting = s.scene.lighting;
+    json!({
+        "revision": s.revision,
+        "objects": objects,
+        "lighting": { "name": lighting.name(), "params": lighting.params() },
+    })
+}
+
+/// A material's baked textures as PNG data URLs. Textures never change for a
+/// given material id, so the viewer caches them by id.
+#[tauri::command]
+fn material_textures(state: State<AppState>, material_id: u32) -> Value {
+    use base64::Engine;
+    let s = state.server.lock().expect("server lock poisoned");
+    let Some(tex) = s
+        .scene
+        .material(material_id)
+        .ok()
+        .and_then(|m| m.textures.clone())
+    else {
+        return Value::Null;
+    };
+    drop(s); // PNG encoding is slow; don't hold the scene lock.
+    let url = |t: &meshmind_core::texture::Texture| {
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(t.to_png())
+        )
+    };
+    json!({
+        "base_color": url(&tex.base_color),
+        "metallic_roughness": url(&tex.metallic_roughness),
+        "normal": url(&tex.normal),
+    })
 }
 
 #[tauri::command]
@@ -102,6 +138,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             mcp,
             scene_snapshot,
+            material_textures,
             connection_info
         ])
         .run(tauri::generate_context!())
