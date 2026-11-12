@@ -49,10 +49,13 @@ pub enum Preset {
     Glass,
     /// A see-through, deeply coloured gem (ruby by default).
     Gemstone,
+    /// Skin or hide: mottled tone that warms toward red in creases, soft
+    /// sheen, pores and fine wrinkles. Any colour: human, orc green, troll grey.
+    Skin,
 }
 
 impl Preset {
-    pub const ALL: [Preset; 16] = [
+    pub const ALL: [Preset; 17] = [
         Preset::PaintedMetal,
         Preset::BareMetal,
         Preset::RustyMetal,
@@ -69,6 +72,7 @@ impl Preset {
         Preset::Bone,
         Preset::Glass,
         Preset::Gemstone,
+        Preset::Skin,
     ];
 
     pub fn name(self) -> &'static str {
@@ -89,6 +93,7 @@ impl Preset {
             Preset::Bone => "bone",
             Preset::Glass => "glass",
             Preset::Gemstone => "gemstone",
+            Preset::Skin => "skin",
         }
     }
 
@@ -114,6 +119,7 @@ impl Preset {
             Preset::Bone => Vec3::new(0.5, 0.41, 0.27),
             Preset::Glass => Vec3::new(0.95, 0.99, 0.97),
             Preset::Gemstone => Vec3::new(0.75, 0.02, 0.06),
+            Preset::Skin => Vec3::new(0.56, 0.3, 0.2),
         }
     }
 
@@ -602,6 +608,22 @@ fn shade(
             s.roughness = s.roughness * (1.0 - wear) + 0.35 * wear;
             s
         }
+        Preset::Skin => {
+            // Pores and wrinkles at a fixed real-world size (millimetres).
+            let pores = smoothstep(0.6, 0.74, fbm(p * 160.0 + seed, 2));
+            let wrinkle = fbm(Vec3::new(p.x * 90.0, p.y * 380.0, p.z * 90.0) + seed, 2);
+            let mottle = (big - 0.5) * 0.3 + (mid - 0.5) * 0.16 + (fine - 0.5) * 0.06;
+            let base = color * (1.0 + mottle);
+            // Blood shows through where skin is thin or folded: warmer, redder.
+            let flush = (cavity * 0.7 + smoothstep(0.55, 0.85, mid) * 0.35).min(1.0);
+            let warm = base * Vec3::new(1.18, 0.86, 0.8);
+            Surface {
+                color: base.lerp(warm, flush) * (1.0 - pores * 0.06),
+                metallic: 0.0,
+                roughness: 0.52 + 0.14 * fine + pores * 0.12 - cavity * 0.08,
+                height: 0.5 - pores * 0.04 + (wrinkle - 0.5) * 0.04,
+            }
+        }
         Preset::Glass | Preset::Gemstone => {
             // Mostly clean and smooth; smudges and fine scratches show in the highlights.
             let smudge = smoothstep(0.55, 0.85, mid) * 0.12;
@@ -793,7 +815,7 @@ fn noise(p: Vec3) -> f32 {
 }
 
 /// Fractal noise in roughly [0, 1].
-fn fbm(p: Vec3, octaves: u32) -> f32 {
+pub(crate) fn fbm(p: Vec3, octaves: u32) -> f32 {
     let (mut sum, mut amp, mut freq, mut norm) = (0.0, 0.5, 1.0, 0.0);
     for _ in 0..octaves {
         sum += noise(p * freq) * amp;

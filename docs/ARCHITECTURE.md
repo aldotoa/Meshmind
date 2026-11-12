@@ -117,6 +117,20 @@ after every change and restores the last session at startup.
    and a bright horizon band in the reflections (what makes polished metal
    read as metal), a shadow-mapped key light, and an invisible floor that
    catches the shadow plus a contact shadow.
+8. **Organic modelling** (`sdf.rs`, `sculpt.rs`, `character.rs`). Bodies are
+   signed distance fields: ellipsoids, tapered capsules and rounded boxes
+   combined in order with a smooth minimum (or smooth subtraction), so parts
+   flow into each other. Surface Nets turns the field into one quad mesh
+   (ambiguous grid faces are resolved first, so it stays watertight), then
+   vertices are snapped onto the true surface and relaxed. Grids are
+   centred on the body so mirrored parts sample identically, parts too far
+   away to matter are skipped per sample, and sampling runs on all cores.
+   The part list is stored on the object (`Object::body`) so a body can be
+   edited by part name and rebuilt. Sculpt brushes move vertices by a
+   smooth falloff around a stroke polyline, optionally mirrored in the
+   object's x. `create_character` writes a part list from species
+   proportions measured in head heights, and finds skin landmarks by
+   marching rays through the field.
 
 ## Known limitations
 
@@ -128,6 +142,8 @@ after every change and restores the last session at startup.
 - Glass in the preview is approximate: one refraction offset per surface,
   no caustics or total internal reflection.
 - Image-to-3D plugins are not built yet.
+- Sculpted bodies are dense (tens of thousands of quads) and unrigged;
+  rebuilding a body from its parts discards sculpt strokes.
 
 ## Roadmap
 
@@ -142,6 +158,9 @@ after every change and restores the last session at startup.
    prompts, documentation, release pipeline with optional code signing, demo
    gallery.
 
-Next ideas: image-to-3D plugins (bring a concept image, get a starting mesh),
-more material presets, sculpt-style deformers, LODs and collision meshes for
-game engines.
+5. **Characters** (in progress): blended-volume bodies, sculpt brushes,
+   character starters with landmarks, skin material.
+
+Next ideas: reducing polygon counts and baking sculpted detail into normal
+maps, rigging, image-to-3D plugins (bring a concept image, get a starting
+mesh), LODs and collision meshes for game engines.

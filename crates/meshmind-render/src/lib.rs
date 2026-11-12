@@ -230,6 +230,18 @@ pub fn render_view(scene: &Scene, view: View, size: u32) -> Image {
 /// Like [`render_view`], but frames the camera on the objects in `focus` (a
 /// close-up) while still drawing the whole scene.
 pub fn render_view_focused(scene: &Scene, view: View, size: u32, focus: Option<&[u32]>) -> Image {
+    render_view_framed(scene, view, size, focus, None)
+}
+
+/// Like [`render_view_focused`]; `region` (centre, radius in metres) frames
+/// a part of the scene instead, such as a character's head or hand.
+pub fn render_view_framed(
+    scene: &Scene,
+    view: View,
+    size: u32,
+    focus: Option<&[u32]>,
+    region: Option<(Vec3, f32)>,
+) -> Image {
     const SS: u32 = 2; // supersampling factor for anti-aliasing
     let n = size * SS;
 
@@ -295,7 +307,9 @@ pub fn render_view_focused(scene: &Scene, view: View, size: u32, focus: Option<&
         let center = (lo + hi) / 2.0;
         let radius = ((hi - lo).length() / 2.0).max(1e-3);
         // The camera frames the focused objects, or everything.
-        let (cam_center, cam_radius) = if flo.x.is_finite() {
+        let (cam_center, cam_radius) = if let Some((c, r)) = region {
+            (c, r.max(1e-3))
+        } else if flo.x.is_finite() {
             ((flo + fhi) / 2.0, ((fhi - flo).length() / 2.0).max(1e-3))
         } else {
             (center, radius)
@@ -715,6 +729,17 @@ pub fn render_sheet_focused(
     size: u32,
     focus: Option<&[u32]>,
 ) -> Image {
+    render_sheet_framed(scene, views, size, focus, None)
+}
+
+/// Like [`render_sheet_focused`], optionally framed on a region (centre, radius).
+pub fn render_sheet_framed(
+    scene: &Scene,
+    views: &[View],
+    size: u32,
+    focus: Option<&[u32]>,
+    region: Option<(Vec3, f32)>,
+) -> Image {
     let cols = views.len().clamp(1, 2) as u32;
     let rows = (views.len() as u32).div_ceil(cols).max(1);
     let gap = 4;
@@ -723,7 +748,7 @@ pub fn render_sheet_focused(
         rows * size + (rows - 1) * gap,
     );
     for (i, &v) in views.iter().enumerate() {
-        let img = render_view_focused(scene, v, size, focus);
+        let img = render_view_framed(scene, v, size, focus, region);
         let (c, r) = (i as u32 % cols, i as u32 / cols);
         sheet.blit(&img, c * (size + gap), r * (size + gap));
     }

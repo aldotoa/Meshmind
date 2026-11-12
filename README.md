@@ -52,9 +52,10 @@ barrel and a potion bottle are built, tool call by tool call.
 | | Tools |
 |---|---|
 | Create | `loft` (blades, handles, horns), `lathe` (round parts), `extrude_outline` (flat silhouettes), `sweep` (tubes, rope, grip wraps), `create_primitive` |
+| Characters | `create_character` (human, orc, goblin, dwarf, troll: one smooth body with anatomy, eyes and landmarks for gear), `sculpt_body` (organic forms melted together from volumes, editable by part name), `sculpt` (inflate, crease, pinch, smooth, flatten, grab and noise brushes, mirrored) |
 | Shape | `deform` (bend, twist, taper), `move_vertices`, `slice`, `extrude`, `inset`, `bevel`, `subdivide`, `boolean` (union, difference, intersection), `mirror`, `array`, `set_shading` |
 | Scene | `list_objects`, `get_object`, `set_transform`, `duplicate_object`, `delete_object`, `clear_scene`, `undo`, `redo` |
-| Look | `apply_smart_material` (painted, bare, rusty and polished metal, gold, bronze, glass, gemstone, ceramic, fabric, leather, bone, plastic, wood, stone, rubber), `set_material`, `unwrap_uvs`, `set_lighting` |
+| Look | `apply_smart_material` (painted, bare, rusty and polished metal, gold, bronze, glass, gemstone, ceramic, fabric, leather, bone, skin, plastic, wood, stone, rubber), `set_material`, `unwrap_uvs`, `set_lighting` |
 | Review | `render_preview` returns studio-lit images (with close-ups via `focus`) the agent looks at to check its own work, and `check_asset` lists what a reviewer would flag |
 | Files | `export_glb` (glTF 2.0 with textures), `save_project` and `open_project` (`.meshmind`) |
 
@@ -69,6 +70,10 @@ normal map. Full reference: [docs/TOOLS.md](docs/TOOLS.md).
 <img src="docs/images/sword-before-after.jpg" alt="A sword built from primitives, and the same sword built with loft, lathe and sweep">
 
 <img src="docs/images/materials-new.jpg" alt="Bronze, ceramic, fabric, bone, glass and gemstone">
+
+<img src="docs/images/recipe-orc.jpg" alt="An orc warrior: one sculpted body with tusks, belt, loincloth, bracers and a pauldron">
+
+<img src="docs/images/characters-lineup.jpg" alt="Goblin, dwarf, human, orc and troll starter bodies">
 
 Every image above was made with tool calls only, by
 [scripts/render_gallery.py](scripts/render_gallery.py) and

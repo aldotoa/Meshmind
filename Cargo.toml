@@ -25,3 +25,7 @@ thiserror = "2"
 meshmind-core = { path = "crates/meshmind-core" }
 meshmind-mcp = { path = "crates/meshmind-mcp" }
 meshmind-render = { path = "crates/meshmind-render" }
+
+# Volume meshing and the preview renderer are slow unoptimised; keep tests fast.
+[profile.dev.package.meshmind-core]
+opt-level = 2

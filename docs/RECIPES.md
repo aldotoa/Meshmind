@@ -79,7 +79,55 @@ The close-up is `render_preview` with `focus` set to the hilt's object ids.
   the neck made by sweeping a closed circle (`path` whose last point equals
   the first).
 
+## Characters: the orc warrior
+
+![Orc warrior recipe](images/recipe-orc.jpg)
+
+Characters need a different approach from props. A body built from separate
+spheres, cylinders and boxes always looks like a stack of toys, however many
+parts it has. MeshMind builds bodies the way a sculptor blocks out clay:
+overlapping volumes melted into **one smooth, watertight surface**.
+
+```sh
+python3 scripts/recipes.py out orc
+```
+
+1. **`create_character`** with `species: "orc"` gives a 2 m body with orc
+   proportions (broad chest, narrow waist, hunch, heavy jaw, pointed ears),
+   five-fingered hands, eyelids and eyeballs. It also returns *landmarks*:
+   world points such as `left_lower_canine`, `waist_front`, `waist_left`,
+   `left_shoulder_top` and `left_forearm_outer` that gear is sized from.
+2. **`sculpt_body` with `edit_parts`** changes parts by name (here heavier
+   forearms and a fuller lower lip) and rebuilds the surface.
+3. **`sculpt`** adds the character: `crease` for frown lines, the folds from
+   nose to mouth, the line under the chest muscles and the abdominal bands;
+   `inflate` for cheekbones and a forearm vein; `noise` over everything for
+   lumpy hide. Strokes mirror to the other side and snap onto the skin.
+4. **Tusks** are a small `sculpt_body` of two mirrored capsules that taper
+   to a point, starting at the lower canines, in `bone`.
+5. **Gear** is separate props sized from the landmarks: a lofted leather belt
+   that fits the waist, a buckle and a fabric loincloth from
+   `extrude_outline`, lathed leather bracers turned to follow the forearms,
+   and a lathed iron pauldron on the shoulder.
+6. The body gets the **`skin`** smart material (mottled, warmer in creases,
+   pores in the normal map).
+
+`create_character` also covers humans (optionally `feminine`), goblins,
+dwarves and trolls, with options for height, bulk, gut, hunch, jaw, ears,
+head size, limb lengths and an A-pose for rigging:
+
+![Goblin, dwarf, human, orc and troll starter bodies](images/characters-lineup.jpg)
+
+For creatures that aren't humanoid (beasts, slimes, tentacles, rocks, roots)
+use `sculpt_body` directly with your own list of ellipsoids, tapered
+capsules and rounded boxes.
+
 ## Known gaps
 
+- Character bodies are dense (roughly 30k quads at `detail: "low"`, 90k at
+  medium for an orc) and have no rig yet. Lowering the polygon count for
+  games and baking sculpted detail into a normal map are planned.
+- Hands are open and relaxed; a fist gripping a weapon still has to be
+  adjusted with `edit_parts`.
 - Fullers run the whole length of a lofted blade; a fuller that stops short
   of the point needs a `boolean` cut instead.

@@ -705,3 +705,73 @@ fn review_prompt_and_styles() {
         .unwrap();
     assert!(text.contains("low-poly"));
 }
+
+#[test]
+fn character_body_sculpt_and_rebuild() {
+    let mut s = Server::new();
+    let r = call(
+        &mut s,
+        "create_character",
+        json!({ "species": "goblin", "detail": "low" }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let c = r["structuredContent"].clone();
+    let body = c["body"].as_u64().unwrap();
+    assert_eq!(c["eyes"].as_array().unwrap().len(), 2);
+    let wf = c["landmarks"]["waist_front"].clone();
+    assert!(wf[2].as_f64().unwrap() > 0.0, "the character faces +Z");
+    let obj = call(&mut s, "get_object", json!({ "id": body, "max_faces": 0 }))
+        ["structuredContent"]
+        .clone();
+    assert_eq!(obj["closed"], true, "one watertight body");
+    assert!(obj["body_part_names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n == "ear"));
+
+    // Sculpt a crease across the belly; the stroke snaps onto the skin.
+    let r = call(
+        &mut s,
+        "sculpt",
+        json!({ "id": body, "brush": "crease", "radius": 0.03, "strength": 0.01,
+        "points": [[0.0, wf[1], wf[2].as_f64().unwrap() - 0.05], [0.08, wf[1], 0.0]] }),
+    );
+    assert!(
+        r["structuredContent"]["moved_vertices"].as_u64().unwrap() > 10,
+        "{r}"
+    );
+
+    // Edit a part by name and rebuild; unknown names are reported.
+    let r = call(
+        &mut s,
+        "sculpt_body",
+        json!({ "id": body, "detail": "low", "edit_parts": [{ "name": "ear", "blend": 0.01 }] }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+    let r = call(
+        &mut s,
+        "sculpt_body",
+        json!({ "id": body, "edit_parts": [{ "name": "tail" }] }),
+    );
+    assert_eq!(r["isError"], true);
+
+    // A free-form creature from parts, with the `radius` and `sphere` shorthands.
+    let r = call(
+        &mut s,
+        "sculpt_body",
+        json!({ "name": "Slug", "detail": "low", "parts": [
+        { "shape": "sphere", "center": [0, 0.1, 0], "radius": 0.1 },
+        { "shape": "capsule", "a": [0, 0.08, 0], "b": [0, 0.05, -0.3], "radius": 0.07, "blend": 0.05 }
+    ] }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+
+    let r = call(
+        &mut s,
+        "render_preview",
+        json!({ "views": ["front"], "size": 128,
+        "focus_point": c["landmarks"]["head_center"], "focus_radius": 0.15 }),
+    );
+    assert_eq!(r["isError"], false, "{r}");
+}

@@ -120,6 +120,13 @@ prompt gives:
   leather, lightly used".
 - **Style**: realistic, stylized (hand-painted fantasy) or low-poly.
 
+For characters and creatures, the agent starts from `create_character`
+(human, orc, goblin, dwarf or troll) or `sculpt_body`, which give one smooth
+body instead of a pile of primitives, then shapes it with sculpt brushes and
+adds gear at the returned landmarks. Say what the character is, its build and
+what it wears: "a hulking orc warrior, hunched, heavy underbite with tusks,
+leather belt and loincloth, one iron shoulder pad".
+
 Three prompt templates package this up. In Claude Code they appear as
 `/mcp__meshmind__model_asset` and so on:
 
@@ -132,7 +139,8 @@ Three prompt templates package this up. In Claude Code they appear as
 The agent also has `check_asset`, which lists problems a reviewer would
 spot (grey parts, stale materials, parts floating free, the model not on
 the ground, default names, triangle count against game budgets), and
-`render_preview` with `focus` for close-ups.
+`render_preview` with `focus` (object ids) or `focus_point` and
+`focus_radius` (any spot, such as a character's face) for close-ups.
 
 ## Tips
 
@@ -141,7 +149,7 @@ the ground, default names, triangle count against game budgets), and
 - If a result looks basic, ask "review it like an art director and fix
   what falls short" (or run `review_asset`) before asking for specific fixes.
 - See [RECIPES.md](RECIPES.md) for worked examples (a longsword, an axe, a
-  barrel and a potion bottle), [EXAMPLES.md](EXAMPLES.md) for prompts that
+  barrel, a potion bottle and an orc warrior), [EXAMPLES.md](EXAMPLES.md) for prompts that
   work well, and
   [TOOLS.md](TOOLS.md) for every tool the agent gets.
 
