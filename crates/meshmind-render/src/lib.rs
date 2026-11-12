@@ -67,6 +67,9 @@ pub struct Image {
     pub width: u32,
     pub height: u32,
     pub pixels: Vec<u8>,
+    /// Per pixel, 0 to 255: how much of it the model covers (empty for
+    /// composed sheets). Used to outline the model over a reference image.
+    pub coverage: Vec<u8>,
 }
 
 impl Image {
@@ -75,6 +78,7 @@ impl Image {
             width,
             height,
             pixels: vec![0; (width * height * 4) as usize],
+            coverage: Vec::new(),
         }
     }
 
@@ -89,7 +93,7 @@ impl Image {
         out
     }
 
-    fn blit(&mut self, src: &Image, x0: u32, y0: u32) {
+    pub fn blit(&mut self, src: &Image, x0: u32, y0: u32) {
         for y in 0..src.height {
             let s = (y * src.width * 4) as usize;
             let d = (((y0 + y) * self.width + x0) * 4) as usize;
@@ -303,6 +307,7 @@ pub fn render_view_framed(
         }
     }
 
+    let mut covered: Vec<bool> = Vec::new();
     if !tris.is_empty() {
         let center = (lo + hi) / 2.0;
         let radius = ((hi - lo).length() / 2.0).max(1e-3);
@@ -389,6 +394,7 @@ pub fn render_view_framed(
             .normalize();
 
         let mut depth = vec![f32::INFINITY; (n * n) as usize];
+        let mut model_px = vec![false; (n * n) as usize];
         // Opaque first, then see-through triangles from back to front, so they
         // can show (and bend) what is behind them.
         let mut order: Vec<usize> = (0..tris.len()).filter(|&i| !glassy(&tris[i])).collect();
@@ -458,6 +464,7 @@ pub fn render_view_framed(
                     if !clear_pass {
                         depth[i] = z;
                     }
+                    model_px[i] = !is_floor || (clear_pass && model_px[i]);
                     // Perspective-correct interpolation.
                     let (a, b, c) = (w0 * inv_w[0], w1 * inv_w[1], w2 * inv_w[2]);
                     let s = a + b + c;
@@ -500,6 +507,7 @@ pub fn render_view_framed(
                         base: Vec3::new(mat.base_color[0], mat.base_color[1], mat.base_color[2]),
                         metallic: mat.metallic,
                         roughness: mat.roughness,
+                        ao: 1.0,
                     };
                     if let Some(tex) = &mat.textures {
                         let b = tex.base_color.sample(uv);
@@ -509,6 +517,7 @@ pub fn render_view_framed(
                             srgb_to_linear(b.z),
                         );
                         let mr = tex.metallic_roughness.sample(uv);
+                        surface.ao = mr.x;
                         surface.roughness *= mr.y;
                         surface.metallic *= mr.z;
                         let tn = tex.normal.sample(uv).xyz() * 2.0 - Vec3::ONE;
@@ -551,6 +560,7 @@ pub fn render_view_framed(
                             base: Vec3::ZERO,
                             metallic: 0.0,
                             roughness: surface.roughness,
+                            ao: surface.ao,
                         };
                         let reflect = shade(&gloss, &light, nrm, to_eye, key, fill, lit, boxes)
                             * (fresnel / 0.04).clamp(1.0, 3.0);
@@ -562,6 +572,7 @@ pub fn render_view_framed(
                 }
             }
         }
+        covered = model_px;
     }
 
     // Downsample and convert to sRGB.
@@ -575,6 +586,15 @@ pub fn render_view_framed(
                 }
             }
             let c = tone_map(sum / (SS * SS) as f32);
+            if !covered.is_empty() {
+                let mut k = 0;
+                for dy in 0..SS {
+                    for dx in 0..SS {
+                        k += covered[((y * SS + dy) * n + x * SS + dx) as usize] as u32;
+                    }
+                }
+                img.coverage.push((k * 255 / (SS * SS)) as u8);
+            }
             let o = ((y * size + x) * 4) as usize;
             img.pixels[o..o + 4].copy_from_slice(&[
                 to_srgb8(c.x),
@@ -591,6 +611,8 @@ struct Surface {
     base: Vec3,
     metallic: f32,
     roughness: f32,
+    /// Ambient occlusion: dims sky light and reflections in creases.
+    ao: f32,
 }
 
 /// Sky seen in direction `d`: used for ambient light and reflections.
@@ -668,7 +690,7 @@ fn shade(
     let ground = Vec3::from(light.ground);
     let ambient = ground.lerp(sky, n.y * 0.5 + 0.5) * light.ambient_intensity;
 
-    let mut out = diffuse * ambient;
+    let mut out = diffuse * ambient * m.ao;
     let n_dot_v = n.dot(v).max(0.0);
     // Reflection of the environment, blurred towards the ambient average by roughness.
     let r = (2.0 * n.dot(v) * n - v).normalize_or(n);
@@ -676,7 +698,7 @@ fn shade(
     // gives polished metal its contrast; rough surfaces average it out.
     let env = (environment(light, r) * (0.3 + 0.7 * rough)).lerp(ambient * 1.6, rough * rough);
     let fresnel_env = f0 + (Vec3::ONE - f0) * (1.0 - n_dot_v).powi(5) * (1.0 - rough);
-    out += fresnel_env * (env + boxes);
+    out += fresnel_env * (env + boxes) * (0.4 + 0.6 * m.ao);
 
     let shininess = (2.0 / (rough * rough * rough * rough) - 2.0).clamp(1.0, 2048.0);
     for (l, color, intensity) in [

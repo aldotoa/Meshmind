@@ -56,7 +56,8 @@ barrel and a potion bottle are built, tool call by tool call.
 | Shape | `deform` (bend, twist, taper), `move_vertices`, `slice`, `extrude`, `inset`, `bevel`, `subdivide`, `boolean` (union, difference, intersection), `mirror`, `array`, `set_shading` |
 | Scene | `list_objects`, `get_object`, `set_transform`, `duplicate_object`, `delete_object`, `clear_scene`, `undo`, `redo` |
 | Look | `apply_smart_material` (painted, bare, rusty and polished metal, gold, bronze, glass, gemstone, ceramic, fabric, leather, bone, skin, plastic, wood, stone, rubber), `set_material`, `unwrap_uvs`, `set_lighting` |
-| Review | `render_preview` returns studio-lit images (with close-ups via `focus`) the agent looks at to check its own work, and `check_asset` lists what a reviewer would flag |
+| Review | `render_preview` returns studio-lit images (with close-ups via `focus`) the agent looks at to check its own work, `check_asset` lists what a reviewer would flag, and `set_reference` plus `compare_to_reference` measure the model against your concept art |
+| Game-ready | `make_game_ready` cuts a dense sculpt to a triangle budget, bakes the detail into normal and occlusion maps and builds LODs; `decimate` and `bake_detail` for finer control |
 | Files | `export_glb` (glTF 2.0 with textures), `save_project` and `open_project` (`.meshmind`) |
 
 Smart materials are baked from the shape: paint chips off convex edges, grime
@@ -74,6 +75,8 @@ normal map. Full reference: [docs/TOOLS.md](docs/TOOLS.md).
 <img src="docs/images/recipe-orc.jpg" alt="An orc warrior: one sculpted body with tusks, belt, loincloth, bracers and a pauldron">
 
 <img src="docs/images/characters-lineup.jpg" alt="Goblin, dwarf, human, orc and troll starter bodies">
+
+<img src="docs/images/game-ready-orc.jpg" alt="The orc body at 179,000 triangles and at 20,000 after make_game_ready, with the sculpted detail kept in normal and occlusion maps">
 
 Every image above was made with tool calls only, by
 [scripts/render_gallery.py](scripts/render_gallery.py) and

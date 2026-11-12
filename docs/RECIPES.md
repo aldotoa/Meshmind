@@ -122,11 +122,56 @@ For creatures that aren't humanoid (beasts, slimes, tentacles, rocks, roots)
 use `sculpt_body` directly with your own list of ellipsoids, tapered
 capsules and rounded boxes.
 
+## Game-ready: baking the detail down
+
+Sculpting needs a dense mesh, but a game can't afford one: the orc body is
+about 180,000 triangles. **`make_game_ready`** does what an artist does in a
+baking tool, in one call:
+
+1. Reduces the mesh to a triangle budget, keeping the silhouette and UV seams.
+2. Unwraps it and bakes the dense mesh's detail into a **normal map** (folds,
+   creases, pores) and an **ambient occlusion** map (soft shadow in crevices).
+3. Re-applies the object's smart material on top of the baked maps.
+4. Builds **LODs** (by default at half and a quarter of the budget), which
+   export as `_LOD0`, `_LOD1` and `_LOD2` under one node in the glTF.
+
+```sh
+python3 scripts/recipes.py out pillar
+```
+
+Orc body, 178,852 triangles before and 20,000 after (full view and chest
+close-up, before then after):
+
+![Orc before and after make_game_ready](images/game-ready-orc.jpg)
+
+A sculpted stone pillar, about 70,000 triangles before and 3,000 after:
+
+![Pillar before and after make_game_ready](images/game-ready-pillar.jpg)
+
+Budgets the agent is given: hero character 15,000 to 40,000 triangles, enemy
+5,000 to 15,000, weapon 1,500 to 5,000, small prop 300 to 1,500. `decimate`
+(reduce only) and `bake_detail` (bake from another object, such as a
+high-poly copy) are there for finer control. Undo brings the dense mesh back.
+
+## Matching concept art
+
+Give the agent a reference image and it can measure itself against it.
+`set_reference` loads a PNG or JPEG for a view (front, back, left, right or
+three_quarter). `compare_to_reference` renders the model from that view and
+returns three panels: the reference, the model, and the model's outline in
+cyan over the reference, scaled to the same height. It also lists where the
+model is too wide or too narrow, band by band from top to bottom:
+
+![Reference, model, and the model's outline over the reference](images/compare-to-reference.jpg)
+
+Here the reference is a troll and the model an orc, so the outline sits
+inside the troll's bulk and the tool reports the arms and legs as too narrow.
+A plain background works best, because the subject is separated from it by
+colour.
+
 ## Known gaps
 
-- Character bodies are dense (roughly 30k quads at `detail: "low"`, 90k at
-  medium for an orc) and have no rig yet. Lowering the polygon count for
-  games and baking sculpted detail into a normal map are planned.
+- Character bodies have no rig yet.
 - Hands are open and relaxed; a fist gripping a weapon still has to be
   adjusted with `edit_parts`.
 - Fullers run the whole length of a lofted blade; a fuller that stops short

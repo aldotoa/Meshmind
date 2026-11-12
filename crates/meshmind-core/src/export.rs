@@ -68,58 +68,86 @@ pub fn to_glb(scene: &Scene) -> Vec<u8> {
             pbr["metallicRoughnessTexture"] =
                 json!({ "index": add(&tex.metallic_roughness, "metallic_roughness") });
             mat["normalTexture"] = json!({ "index": add(&tex.normal, "normal") });
+            // Occlusion lives in the red channel of the same texture.
+            mat["occlusionTexture"] = pbr["metallicRoughnessTexture"].clone();
         }
         mat["pbrMetallicRoughness"] = pbr;
         materials.push(mat);
     }
 
+    let mut roots: Vec<usize> = Vec::new();
     for obj in scene.objects() {
-        let mesh = obj.mesh.to_mesh();
-        if mesh.indices.is_empty() {
+        let material = material_index.get(&obj.material).copied().unwrap_or(0);
+        let mut levels = vec![(&obj.mesh, obj.name.clone())];
+        if !obj.lods.is_empty() {
+            // Unity, Unreal and Godot build an LOD group from _LOD0, _LOD1, ... children.
+            levels[0].1 = format!("{}_LOD0", obj.name);
+            for (i, l) in obj.lods.iter().enumerate() {
+                levels.push((l, format!("{}_LOD{}", obj.name, i + 1)));
+            }
+        }
+        let mut level_nodes = Vec::new();
+        for (poly, name) in levels {
+            let mesh = poly.to_mesh();
+            if mesh.indices.is_empty() {
+                continue;
+            }
+            let floats =
+                |data: Vec<f32>| -> Vec<u8> { data.iter().flat_map(|f| f.to_le_bytes()).collect() };
+            let pos = floats(mesh.positions.iter().flat_map(|p| p.to_array()).collect());
+            let nrm = floats(mesh.normals.iter().flat_map(|p| p.to_array()).collect());
+            let uv = floats(mesh.uvs.iter().flat_map(|p| p.to_array()).collect());
+            let idx: Vec<u8> = mesh.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
+            let bounds = mesh.bounds().expect("non-empty mesh");
+            let count = mesh.positions.len();
+
+            let base = accessors.len();
+            let v = push_view(&mut bin, &pos, Some(ARRAY_BUFFER));
+            accessors.push(
+                json!({ "bufferView": v, "componentType": FLOAT, "count": count, "type": "VEC3",
+                "min": bounds.min.to_array(), "max": bounds.max.to_array() }),
+            );
+            let v = push_view(&mut bin, &nrm, Some(ARRAY_BUFFER));
+            accessors.push(
+                json!({ "bufferView": v, "componentType": FLOAT, "count": count, "type": "VEC3" }),
+            );
+            let v = push_view(&mut bin, &uv, Some(ARRAY_BUFFER));
+            accessors.push(
+                json!({ "bufferView": v, "componentType": FLOAT, "count": count, "type": "VEC2" }),
+            );
+            let v = push_view(&mut bin, &idx, Some(ELEMENT_ARRAY_BUFFER));
+            accessors.push(json!({ "bufferView": v, "componentType": UNSIGNED_INT, "count": mesh.indices.len(), "type": "SCALAR" }));
+
+            meshes.push(json!({
+                "name": name,
+                "primitives": [{
+                    "attributes": { "POSITION": base, "NORMAL": base + 1, "TEXCOORD_0": base + 2 },
+                    "indices": base + 3,
+                    "material": material,
+                }]
+            }));
+            nodes.push(json!({ "name": name, "mesh": meshes.len() - 1 }));
+            level_nodes.push(nodes.len() - 1);
+        }
+        if level_nodes.is_empty() {
             continue;
         }
-        let floats =
-            |data: Vec<f32>| -> Vec<u8> { data.iter().flat_map(|f| f.to_le_bytes()).collect() };
-        let pos = floats(mesh.positions.iter().flat_map(|p| p.to_array()).collect());
-        let nrm = floats(mesh.normals.iter().flat_map(|p| p.to_array()).collect());
-        let uv = floats(mesh.uvs.iter().flat_map(|p| p.to_array()).collect());
-        let idx: Vec<u8> = mesh.indices.iter().flat_map(|i| i.to_le_bytes()).collect();
-        let bounds = mesh.bounds().expect("non-empty mesh");
-        let count = mesh.positions.len();
-
-        let base = accessors.len();
-        let v = push_view(&mut bin, &pos, Some(ARRAY_BUFFER));
-        accessors.push(
-            json!({ "bufferView": v, "componentType": FLOAT, "count": count, "type": "VEC3",
-            "min": bounds.min.to_array(), "max": bounds.max.to_array() }),
-        );
-        let v = push_view(&mut bin, &nrm, Some(ARRAY_BUFFER));
-        accessors.push(
-            json!({ "bufferView": v, "componentType": FLOAT, "count": count, "type": "VEC3" }),
-        );
-        let v = push_view(&mut bin, &uv, Some(ARRAY_BUFFER));
-        accessors.push(
-            json!({ "bufferView": v, "componentType": FLOAT, "count": count, "type": "VEC2" }),
-        );
-        let v = push_view(&mut bin, &idx, Some(ELEMENT_ARRAY_BUFFER));
-        accessors.push(json!({ "bufferView": v, "componentType": UNSIGNED_INT, "count": mesh.indices.len(), "type": "SCALAR" }));
-
-        meshes.push(json!({
-            "name": obj.name,
-            "primitives": [{
-                "attributes": { "POSITION": base, "NORMAL": base + 1, "TEXCOORD_0": base + 2 },
-                "indices": base + 3,
-                "material": material_index.get(&obj.material).copied().unwrap_or(0),
-            }]
-        }));
         let t = &obj.transform;
-        nodes.push(json!({
-            "name": obj.name,
-            "mesh": meshes.len() - 1,
-            "translation": t.translation.to_array(),
-            "rotation": t.rotation.to_array(),
-            "scale": t.scale.to_array(),
-        }));
+        let place = |node: &mut Value| {
+            node["translation"] = json!(t.translation.to_array());
+            node["rotation"] = json!(t.rotation.to_array());
+            node["scale"] = json!(t.scale.to_array());
+        };
+        if obj.lods.is_empty() {
+            let i = level_nodes[0];
+            place(&mut nodes[i]);
+            roots.push(i);
+        } else {
+            let mut parent = json!({ "name": obj.name, "children": level_nodes });
+            place(&mut parent);
+            nodes.push(parent);
+            roots.push(nodes.len() - 1);
+        }
     }
     while bin.len() % 4 != 0 {
         bin.push(0);
@@ -128,7 +156,7 @@ pub fn to_glb(scene: &Scene) -> Vec<u8> {
     let mut doc = json!({
         "asset": { "version": "2.0", "generator": concat!("MeshMind ", env!("CARGO_PKG_VERSION")) },
         "scene": 0,
-        "scenes": [{ "nodes": (0..nodes.len()).collect::<Vec<_>>() }],
+        "scenes": [{ "nodes": roots }],
         "nodes": nodes,
         "meshes": meshes,
         "materials": materials,

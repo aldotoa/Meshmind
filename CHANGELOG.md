@@ -7,6 +7,17 @@ All notable changes are listed here. The format follows
 ## [Unreleased]
 
 ### Added
+- `make_game_ready`: reduces a dense mesh to a triangle budget, bakes the
+  lost detail into normal and ambient occlusion maps, re-applies the smart
+  material and builds LODs, exported as `_LOD0`, `_LOD1`... under one glTF
+  node. Also `decimate` (quadric edge collapse that keeps UV seams) and
+  `bake_detail` (bake from any dense object).
+- Reference images: `set_reference` loads concept art (PNG or JPEG) for a
+  view, and `compare_to_reference` overlays the model's outline on it and
+  lists where the model is too wide or too narrow.
+- Ambient occlusion is exported (`occlusionTexture`, packed in the red
+  channel of the metallic-roughness texture) and shown in the preview and
+  viewer.
 - Characters and organic shapes: `sculpt_body` melts ellipsoids, tapered
   capsules and rounded boxes into one smooth, watertight surface, editable by
   part name; `sculpt` brushes (inflate, crease, pinch, smooth, flatten, grab,

@@ -127,6 +127,14 @@ adds gear at the returned landmarks. Say what the character is, its build and
 what it wears: "a hulking orc warrior, hunched, heavy underbite with tusks,
 leather belt and loincloth, one iron shoulder pad".
 
+If you have concept art, a sketch or a photo, give the agent the file path:
+it loads it with `set_reference` and calls `compare_to_reference` after each
+round, which overlays the model's outline on your image and lists where the
+proportions are off. At the end it calls `make_game_ready` on sculpted
+objects, which cuts them to a game triangle budget and bakes the detail into
+normal and occlusion maps, with LODs. Say the budget if you have one: "a
+hero character, under 25k triangles".
+
 Three prompt templates package this up. In Claude Code they appear as
 `/mcp__meshmind__model_asset` and so on:
 

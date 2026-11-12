@@ -3,6 +3,7 @@
 //! This crate has no UI and no I/O beyond what callers ask for, so it can be
 //! driven from the MCP server, the desktop app, or tests.
 
+pub mod bake;
 pub mod bevel;
 pub mod character;
 pub mod csg;
@@ -15,10 +16,12 @@ pub mod ops;
 pub mod poly;
 pub mod primitives;
 pub mod project;
+pub mod reference;
 pub mod scene;
 pub mod sculpt;
 pub mod sdf;
 pub mod shapes;
+pub mod simplify;
 pub mod smart;
 pub mod texture;
 pub mod uv;
